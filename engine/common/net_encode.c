@@ -70,6 +70,7 @@ static const delta_field_t cmd_fields[] =
 { UCMD_DEF_( impact_position[0], reserved[1] ) },
 { UCMD_DEF_( impact_position[1], reserved[2] ) },
 { UCMD_DEF_( impact_position[2], reserved[3] ) },
+{ UCMD_DEF( is_donator )                       },
 };
 
 static const delta_field_t pm_fields[] =

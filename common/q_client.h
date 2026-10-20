@@ -50,9 +50,13 @@ typedef struct usercmd_s
 	// unused HL impact stuff, left for modders
 	// TODO: document how to use them in delta encoding
 	int32_t   reserved[4];
+
+	// Cry of Fear (Steam) appends this field to usercmd_t (see its delta.lst).
+	// Without it the game DLLs see a playermove_t that is 4 bytes too small.
+	int32_t   is_donator;
 } usercmd_t;
 
-STATIC_CHECK_SIZEOF( usercmd_t, 52, 52 );
+STATIC_CHECK_SIZEOF( usercmd_t, 56, 56 );
 
 typedef struct dlight_s
 {
