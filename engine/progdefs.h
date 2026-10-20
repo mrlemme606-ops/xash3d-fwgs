@@ -110,6 +110,11 @@ typedef struct entvars_s
 
 	int		light_level;
 
+	// Cry of Fear (Steam) inserts one extra 4-byte field here. Its own save/restore
+	// table puts 'sequence' at +0x12C instead of +0x128, and everything after shifts by 4.
+	int		cof_extra;
+
+
 	int		sequence;		// animation sequence
 	int		gaitsequence;	// movement animation sequence for player (0 for none)
 	float		frame;		// % playback position in animation sequences (0..255)
