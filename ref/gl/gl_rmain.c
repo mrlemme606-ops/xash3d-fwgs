@@ -64,6 +64,13 @@ qboolean R_OpaqueEntity( cl_entity_t *ent )
 {
 	if( R_GetEntityRenderMode( ent ) == kRenderNormal )
 	{
+		// GoldSrc decides opaque-vs-translucent from rendermode alone. Cry of Fear stores its
+		// own values in renderfx (92/137/184: draw distance and sky markers); without this
+		// they are sorted as translucent and drawn too late (missing menu skyline).
+		// Found by hajdawery/cof-enhanced (GPL-3.0).
+		if( ent->curstate.renderfx > kRenderFxLightMultiplier )
+			return true;
+
 		switch( ent->curstate.renderfx )
 		{
 		case kRenderFxNone:
