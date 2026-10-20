@@ -1792,6 +1792,34 @@ static int GAME_EXPORT pfnServerCmd( const char *szCmdString )
 	if( COM_StringEmptyOrNULL( szCmdString ))
 		return 0;
 
+	// Cry of Fear: the original GoldSrc engine handles the client's tape-recorder save
+	// request ("savehack cofsave1" .. "savehack cofsave5") itself. Without this, it falls
+	// through as an unknown command and no save file is written.
+	// Narrow on purpose: only exact slots 1-5, single player, game folder cryoffear.
+	// Approach first documented by hajdawery/cof-enhanced (GPL-3.0).
+	if( GI && !Q_stricmp( GI->gamefolder, "cryoffear" ) && SV_Active() && CL_Active() &&
+		cl.maxclients == 1 && !cls.demoplayback && !Q_strncmp( szCmdString, "savehack cofsave", 16 ))
+	{
+		const char *slot = szCmdString + 16;
+
+		if( *slot >= '1' && *slot <= '5' )
+		{
+			const char *tail = slot + 1;
+
+			while( *tail == ' ' || *tail == '\t' || *tail == '\r' || *tail == '\n' )
+				tail++;
+
+			if( !*tail )
+			{
+				char command[32];
+
+				Q_snprintf( command, sizeof( command ), "save cofsave%c\n", *slot );
+				Cbuf_AddText( command );
+				return 1;
+			}
+		}
+	}
+
 	// just like the client typed "cmd xxxxx" at the console
 	MSG_BeginClientCmd( &cls.netchan.message, clc_stringcmd );
 	MSG_WriteString( &cls.netchan.message, szCmdString );
