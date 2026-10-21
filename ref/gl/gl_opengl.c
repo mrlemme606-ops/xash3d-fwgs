@@ -1,5 +1,6 @@
 
 #include "gl_local.h"
+#include "gl_vr.h"
 #if XASH_GL4ES
 #include "gl4es/include/gl4esinit.h"
 #include "gl4es/include/gl4eshint.h"
@@ -1225,6 +1226,8 @@ GL_InitCommands
 */
 static void GL_InitCommands( void )
 {
+	VR_InitCvars();
+
 	gEngfuncs.Cvar_RegisterVariable( &r_lighting_ambient );
 	gEngfuncs.Cvar_RegisterVariable( &r_novis );
 	gEngfuncs.Cvar_RegisterVariable( &r_nocull );

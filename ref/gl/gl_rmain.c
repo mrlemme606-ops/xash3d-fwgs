@@ -14,6 +14,7 @@ GNU General Public License for more details.
 */
 
 #include "gl_local.h"
+#include "gl_vr.h"
 #include "xash3d_mathlib.h"
 #include "library.h"
 #include "beamdef.h"
@@ -396,6 +397,19 @@ static void R_SetupProjectionMatrix( matrix4x4 m )
 
 	GLfloat xMax = zNear * tan( RI.rvp.fov_x * M_PI_F / 360.0f );
 	GLfloat xMin = -xMax;
+
+	// VR: use the headset's own (asymmetric) frustum for this eye
+	{
+		float vr_left, vr_right, vr_up, vr_down;
+
+		if( VR_GetEyeFrustum( &vr_left, &vr_right, &vr_up, &vr_down ))
+		{
+			xMin = zNear * vr_left;
+			xMax = zNear * vr_right;
+			yMin = zNear * vr_down;
+			yMax = zNear * vr_up;
+		}
+	}
 
 	if( tr.rotation & 1 )
 	{
@@ -1054,6 +1068,8 @@ void R_BeginFrame( qboolean clearScene )
 {
 	glConfig.softwareGammaUpdate = false;	// in case of possible fails
 
+	VR_NewFrame();
+
 	GL_CheckRenderTargets();
 
 	if(( gl_clear->value || ENGINE_GET_PARM( PARM_DEV_OVERVIEW )) &&
@@ -1100,6 +1116,29 @@ void R_RenderFrame( const ref_viewpass_t *rvp )
 {
 	if( r_norefresh->value )
 		return;
+
+	// VR: draw the main world pass once per eye and hand the images to SteamVR
+	if( VR_BeginMainPass( rvp ))
+	{
+		ref_viewpass_t eyepass;
+		int eye;
+
+		R_SetupRefParams( rvp );
+		tr.fCustomRendering = false;
+		R_RunViewmodelEvents();
+		tr.realframecount++;
+
+		for( eye = 0; eye < 2; eye++ )
+		{
+			VR_SetupEyeView( eye, rvp, &eyepass );
+			R_SetupRefParams( &eyepass );
+			R_RenderScene();
+			VR_EndEyePass( eye );
+		}
+
+		VR_FinishFrame();
+		return;
+	}
 
 	// setup the initial render params
 	R_SetupRefParams( rvp );
