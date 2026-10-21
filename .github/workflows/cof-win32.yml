@@ -21,6 +21,13 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Fetch OpenVR C header (pinned to an exact Valve commit)
+        shell: bash
+        run: |
+          curl -fsSL -o ref/gl/openvr_capi.h \
+            https://raw.githubusercontent.com/ValveSoftware/openvr/6aacebd1246592d9911439d5abd0c657b8948ab0/headers/openvr_capi.h
+          test -s ref/gl/openvr_capi.h
+
       - name: Install dependencies (SDL2, etc.)
         run: bash scripts/gha/deps_win32.sh
 
