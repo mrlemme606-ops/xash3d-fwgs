@@ -18,15 +18,86 @@ Design notes:
 #include "gl_vr.h"
 #include "xash3d_mathlib.h"
 
-#define OPENVR_API_NODLL
 #include <stdint.h>
 #include <stdbool.h>
-#include "openvr_capi.h"
 
-#define VR_MAX_DEVICES 64
+/*
+=================
+Minimal OpenVR C interface definitions.
 
-typedef intptr_t (*pfnVR_InitInternal)( EVRInitError *peError, EVRApplicationType eType );
-typedef intptr_t (*pfnVR_GetGenericInterface)( const char *pchInterfaceVersion, EVRInitError *peError );
+Valve's openvr_capi.h does not compile as C with MSVC, so only the pieces used here are declared.
+The function tables must match the layout of the "FnTable:" interfaces exactly (members are
+listed in Valve's order, anything we do not call is a placeholder pointer).
+Interface versions: IVRSystem_019, IVRCompositor_022 (both still served by current SteamVR).
+=================
+*/
+#if defined( _WIN32 )
+#define VR_FN __stdcall
+#else
+#define VR_FN
+#endif
+
+#define VR_MAX_DEVICES		64
+#define VR_HMD_INDEX		0
+#define VR_INIT_NONE		0
+#define VR_APP_SCENE		1
+#define VR_TRACKING_STANDING	1
+#define VR_TEXTURE_OPENGL		1
+#define VR_COLORSPACE_GAMMA		1
+#define VR_SUBMIT_DEFAULT		0
+#define VR_COMPOSITOR_OK		0
+
+typedef struct { float m[3][4]; } HmdMatrix34_t;
+typedef struct { float v[3]; } HmdVector3_t;
+
+typedef struct
+{
+	HmdMatrix34_t	mDeviceToAbsoluteTracking;
+	HmdVector3_t	vVelocity;
+	HmdVector3_t	vAngularVelocity;
+	int		eTrackingResult;
+	bool		bPoseIsValid;
+	bool		bDeviceIsConnected;
+} TrackedDevicePose_t;
+
+typedef struct
+{
+	void		*handle;
+	int		eType;
+	int		eColorSpace;
+} Texture_t;
+
+typedef struct
+{
+	float		uMin, vMin;
+	float		uMax, vMax;
+} VRTextureBounds_t;
+
+struct VR_IVRSystem_FnTable
+{
+	void (VR_FN *GetRecommendedRenderTargetSize)( uint32_t *pnWidth, uint32_t *pnHeight );
+	void *GetProjectionMatrix;	// not used
+	void (VR_FN *GetProjectionRaw)( int eEye, float *pfLeft, float *pfRight, float *pfTop, float *pfBottom );
+	void *ComputeDistortion;	// not used
+	HmdMatrix34_t (VR_FN *GetEyeToHeadTransform)( int eEye );
+};
+
+struct VR_IVRCompositor_FnTable
+{
+	void (VR_FN *SetTrackingSpace)( int eOrigin );
+	void *GetTrackingSpace;		// not used
+	int (VR_FN *WaitGetPoses)( TrackedDevicePose_t *pRenderPoseArray, uint32_t unRenderPoseArrayCount,
+		TrackedDevicePose_t *pGamePoseArray, uint32_t unGamePoseArrayCount );
+	void *GetLastPoses;		// not used
+	void *GetLastPoseForTrackedDeviceIndex;	// not used
+	int (VR_FN *Submit)( int eEye, Texture_t *pTexture, VRTextureBounds_t *pBounds, int nSubmitFlags );
+};
+
+static const char *VR_SYSTEM_INTERFACE = "FnTable:IVRSystem_019";
+static const char *VR_COMPOSITOR_INTERFACE = "FnTable:IVRCompositor_022";
+
+typedef intptr_t (*pfnVR_InitInternal)( int *peError, int eType );
+typedef intptr_t (*pfnVR_GetGenericInterface)( const char *pchInterfaceVersion, int *peError );
 typedef bool (*pfnVR_IsHmdPresent)( void );
 
 static CVAR_DEFINE_AUTO( vr_enable, "0", 0, "enable SteamVR (OpenVR) stereo rendering" );
@@ -117,8 +188,7 @@ static void VR_Init( void )
 	pfnVR_InitInternal initInternal;
 	pfnVR_GetGenericInterface getInterface;
 	pfnVR_IsHmdPresent isHmdPresent;
-	EVRInitError err = EVRInitError_VRInitError_None;
-	char name[128];
+	int err = VR_INIT_NONE;
 	int eye;
 
 	vr.lib = gEngfuncs.COM_LoadLibrary( "openvr_api.dll", false, true );
@@ -145,33 +215,31 @@ static void VR_Init( void )
 		return;
 	}
 
-	initInternal( &err, EVRApplicationType_VRApplication_Scene );
+	initInternal( &err, VR_APP_SCENE );
 
-	if( err != EVRInitError_VRInitError_None )
+	if( err != VR_INIT_NONE )
 	{
 		VR_Fail( "VR_InitInternal failed", (int)err );
 		return;
 	}
 
-	Q_snprintf( name, sizeof( name ), "FnTable:%s", IVRSystem_Version );
-	vr.system = (struct VR_IVRSystem_FnTable *)getInterface( name, &err );
+	vr.system = (struct VR_IVRSystem_FnTable *)getInterface( VR_SYSTEM_INTERFACE, &err );
 
-	if( !vr.system || err != EVRInitError_VRInitError_None )
+	if( !vr.system || err != VR_INIT_NONE )
 	{
 		VR_Fail( "can't get IVRSystem", (int)err );
 		return;
 	}
 
-	Q_snprintf( name, sizeof( name ), "FnTable:%s", IVRCompositor_Version );
-	vr.compositor = (struct VR_IVRCompositor_FnTable *)getInterface( name, &err );
+	vr.compositor = (struct VR_IVRCompositor_FnTable *)getInterface( VR_COMPOSITOR_INTERFACE, &err );
 
-	if( !vr.compositor || err != EVRInitError_VRInitError_None )
+	if( !vr.compositor || err != VR_INIT_NONE )
 	{
 		VR_Fail( "can't get IVRCompositor", (int)err );
 		return;
 	}
 
-	vr.compositor->SetTrackingSpace( ETrackingUniverseOrigin_TrackingUniverseStanding );
+	vr.compositor->SetTrackingSpace( VR_TRACKING_STANDING );
 
 	for( eye = 0; eye < 2; eye++ )
 	{
@@ -179,13 +247,13 @@ static void VR_Init( void )
 		HmdMatrix34_t e;
 
 		// raw projection: left/top are negative. top is negative = UP in OpenVR, so flip it
-		vr.system->GetProjectionRaw( (EVREye)eye, &l, &r, &t, &b );
+		vr.system->GetProjectionRaw( eye, &l, &r, &t, &b );
 		vr.tan_frustum[eye][0] = l;
 		vr.tan_frustum[eye][1] = r;
 		vr.tan_frustum[eye][2] = -t;
 		vr.tan_frustum[eye][3] = -b;
 
-		e = vr.system->GetEyeToHeadTransform( (EVREye)eye );
+		e = vr.system->GetEyeToHeadTransform( eye );
 		vr.eye_offset[eye][0] = e.m[0][3];
 		vr.eye_offset[eye][1] = e.m[1][3];
 		vr.eye_offset[eye][2] = e.m[2][3];
@@ -222,7 +290,7 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 
 	// blocks until it is time to start rendering the next frame
 	vr.compositor->WaitGetPoses( vr.poses, VR_MAX_DEVICES, NULL, 0 );
-	hmd = &vr.poses[k_unTrackedDeviceIndex_Hmd];
+	hmd = &vr.poses[VR_HMD_INDEX];
 
 	if( !hmd->bPoseIsValid )
 		return false;
@@ -261,7 +329,7 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 
 void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 {
-	const HmdMatrix34_t *m = &vr.poses[k_unTrackedDeviceIndex_Hmd].mDeviceToAbsoluteTracking;
+	const HmdMatrix34_t *m = &vr.poses[VR_HMD_INDEX].mDeviceToAbsoluteTracking;
 	const float *t = vr.eye_offset[eye];
 	float ep[3];
 	vec3_t eyepos, offset, fwd, left, up;
@@ -377,20 +445,20 @@ void VR_FinishFrame( void )
 	{
 		Texture_t tex;
 		VRTextureBounds_t bounds;
-		EVRCompositorError err;
+		int err;
 
 		tex.handle = (void *)(uintptr_t)vr.tex[eye];
-		tex.eType = ETextureType_TextureType_OpenGL;
-		tex.eColorSpace = EColorSpace_ColorSpace_Gamma;
+		tex.eType = VR_TEXTURE_OPENGL;
+		tex.eColorSpace = VR_COLORSPACE_GAMMA;
 
 		bounds.uMin = 0.0f;
 		bounds.uMax = 1.0f;
 		bounds.vMin = 0.0f;
 		bounds.vMax = 1.0f;
 
-		err = vr.compositor->Submit( (EVREye)eye, &tex, &bounds, EVRSubmitFlags_Submit_Default );
+		err = vr.compositor->Submit( eye, &tex, &bounds, VR_SUBMIT_DEFAULT );
 
-		if( err != EVRCompositorError_VRCompositorError_None )
+		if( err != VR_COMPOSITOR_OK )
 			gEngfuncs.Con_DPrintf( S_ERROR "VR: Submit failed for eye %d (code %d)\n", eye, (int)err );
 	}
 
