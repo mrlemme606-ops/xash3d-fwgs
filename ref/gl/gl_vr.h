@@ -21,4 +21,9 @@ qboolean VR_GetEyeFrustum( float *left, float *right, float *up, float *down );
 void VR_EndEyePass( int eye );
 void VR_FinishFrame( void );
 
+// controller input (gl_vr_input.c)
+void *VR_GetSystemTable( void );
+void VR_InputInitCvars( void );
+void VR_InputPoll( float head_yaw_relative );
+
 #endif // GL_VR_H

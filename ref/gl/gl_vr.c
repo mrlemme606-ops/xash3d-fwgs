@@ -103,6 +103,9 @@ typedef bool (*pfnVR_IsHmdPresent)( void );
 static CVAR_DEFINE_AUTO( vr_enable, "0", 0, "enable SteamVR (OpenVR) stereo rendering" );
 static CVAR_DEFINE_AUTO( vr_worldscale, "39.37", 0, "game units per meter (GoldSrc: 1 unit = 1 inch)" );
 static CVAR_DEFINE_AUTO( vr_flip_roll, "0", 0, "set to 1 if head roll is inverted" );
+static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotation only), useful for diagnosing warping" );
+static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
+static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
 
 static struct
 {
@@ -122,6 +125,8 @@ static struct
 	float		eye_offset[2][3];	// eye position in head space, meters (OpenVR axes)
 
 	vec3_t		ref_pos;	// head position when recentered (game axes, units)
+	float		ref_head_ovr[3];	// head position when recentered (OpenVR axes, meters)
+	int		debug_frames;
 	float		ref_yaw;	// head yaw when recentered (degrees)
 
 	vec3_t		head_pos;	// current head position, OpenVR axes, meters
@@ -180,6 +185,10 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_enable );
 	gEngfuncs.Cvar_RegisterVariable( &vr_worldscale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_flip_roll );
+	gEngfuncs.Cvar_RegisterVariable( &vr_positional );
+	gEngfuncs.Cvar_RegisterVariable( &vr_fov_scale );
+	gEngfuncs.Cvar_RegisterVariable( &vr_debug );
+	VR_InputInitCvars();
 	gEngfuncs.Cmd_AddCommand( "vr_recenter", VR_Recenter_f, "recenter the VR view on the current head position and direction" );
 }
 
@@ -318,13 +327,25 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 
 	if( !vr.have_ref )
 	{
+		VectorCopy( p, vr.ref_head_ovr );
 		VR_ConvPos( p, vr.ref_pos );
 		VectorCopy( vr.axis_fwd, fwd );
 		vr.ref_yaw = RAD2DEG( atan2( fwd[1], fwd[0] ));
 		vr.have_ref = true;
 	}
 
+	{
+		float rel = RAD2DEG( atan2( vr.axis_fwd[1], vr.axis_fwd[0] )) - vr.ref_yaw;
+
+		VR_InputPoll( rel );
+	}
+
 	return true;
+}
+
+void *VR_GetSystemTable( void )
+{
+	return vr.system;
 }
 
 void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
@@ -340,7 +361,11 @@ void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 
 	// eye position in tracking space: head position + head rotation * eye offset
 	for( i = 0; i < 3; i++ )
-		ep[i] = m->m[i][3] + m->m[i][0] * t[0] + m->m[i][1] * t[1] + m->m[i][2] * t[2];
+	{
+		float head = vr_positional.value ? m->m[i][3] : vr.ref_head_ovr[i];
+
+		ep[i] = head + m->m[i][0] * t[0] + m->m[i][1] * t[1] + m->m[i][2] * t[2];
+	}
 
 	VR_ConvPos( ep, eyepos );
 	VectorSubtract( eyepos, vr.ref_pos, offset );
@@ -365,10 +390,10 @@ void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 
 	// asymmetric frustum from the headset; the culling frustum gets a symmetric superset
 	for( i = 0; i < 4; i++ )
-		vr.cur_frustum[i] = vr.tan_frustum[eye][i];
+		vr.cur_frustum[i] = vr.tan_frustum[eye][i] * vr_fov_scale.value;
 
-	tan_x = Q_max( -vr.tan_frustum[eye][0], vr.tan_frustum[eye][1] );
-	tan_y = Q_max( vr.tan_frustum[eye][2], -vr.tan_frustum[eye][3] );
+	tan_x = Q_max( -vr.cur_frustum[0], vr.cur_frustum[1] );
+	tan_y = Q_max( vr.cur_frustum[2], -vr.cur_frustum[3] );
 	out->fov_x = 2.0f * RAD2DEG( atan( tan_x ));
 	out->fov_y = 2.0f * RAD2DEG( atan( tan_y ));
 
@@ -464,4 +489,14 @@ void VR_FinishFrame( void )
 
 	pglFlush();
 	vr.frame_done = true;
+
+	if( vr_debug.value && ++vr.debug_frames >= 72 )
+	{
+		vr.debug_frames = 0;
+		gEngfuncs.Con_Printf( "VR debug: head %.3f %.3f %.3f m, eye0 tan L%.2f R%.2f U%.2f D%.2f, eye1 tan L%.2f R%.2f U%.2f D%.2f, tex %dx%d, window %dx%d, scale %.2f, fovscale %.2f, positional %d\n",
+			vr.head_pos[0], vr.head_pos[1], vr.head_pos[2],
+			vr.tan_frustum[0][0], vr.tan_frustum[0][1], vr.tan_frustum[0][2], vr.tan_frustum[0][3],
+			vr.tan_frustum[1][0], vr.tan_frustum[1][1], vr.tan_frustum[1][2], vr.tan_frustum[1][3],
+			vr.tex_w, vr.tex_h, gpGlobals->width, gpGlobals->height, vr_worldscale.value, vr_fov_scale.value, (int)vr_positional.value );
+	}
 }

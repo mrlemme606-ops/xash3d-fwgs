@@ -807,6 +807,7 @@ static void CL_CreateCmd( void )
 	Platform_PreCreateMove();
 	clgame.dllFuncs.CL_CreateMove( host.frametime, cmd, active );
 	IN_EngineAppendMove( host.frametime, cmd, active );
+	IN_VRAppendMove( host.frametime, cmd, active );
 
 	CL_PopPMStates();
 

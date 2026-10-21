@@ -49,6 +49,8 @@ void IN_GyroDrawDebug( void );
 uint IN_CollectInputDevices( void );
 void IN_LockInputDevices( qboolean lock );
 void IN_EngineAppendMove( float frametime, usercmd_t *cmd, qboolean active );
+void IN_VRInit( void );
+void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active );
 
 void IN_SetRelativeMouseMode( qboolean set );
 void IN_SetMouseGrab( qboolean set );

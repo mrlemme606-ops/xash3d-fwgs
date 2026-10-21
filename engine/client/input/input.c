@@ -461,6 +461,8 @@ IN_Init
 */
 void IN_Init( void )
 {
+	IN_VRInit();
+
 	Cvar_RegisterVariable( &cl_forwardspeed );
 	Cvar_RegisterVariable( &cl_backspeed );
 	Cvar_RegisterVariable( &cl_sidespeed );
