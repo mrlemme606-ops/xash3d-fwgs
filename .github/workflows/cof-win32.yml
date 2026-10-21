@@ -27,6 +27,8 @@ jobs:
           curl -fsSL -o ref/gl/openvr_capi.h \
             https://raw.githubusercontent.com/ValveSoftware/openvr/6aacebd1246592d9911439d5abd0c657b8948ab0/headers/openvr_capi.h
           test -s ref/gl/openvr_capi.h
+          # Valve's C header contains one C++ reference parameter that MSVC's C mode rejects.
+          sed -i 's/struct HmdVector2_t & vCenter/struct HmdVector2_t * vCenter/' ref/gl/openvr_capi.h
 
       - name: Install dependencies (SDL2, etc.)
         run: bash scripts/gha/deps_win32.sh
