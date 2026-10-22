@@ -24,6 +24,13 @@ void VR_FinishFrame( void );
 // controller input (gl_vr_input.c)
 void *VR_GetSystemTable( void );
 void VR_InputInitCvars( void );
-void VR_InputPoll( float head_yaw_relative );
+void VR_InputPoll( float head_yaw_relative, float head_pitch, qboolean physical_crouch );
+
+// helpers for the UI panel (gl_vr_ui.c)
+qboolean VR_IsActive( void );
+void *VR_GetInterface( const char *fntable_name );
+void VR_GetHeadMatrix( float m[3][4] );
+void VR_UIUpdate( void );
+void VR_UIInitCvars( void );
 
 #endif // GL_VR_H

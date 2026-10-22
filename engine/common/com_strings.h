@@ -65,7 +65,8 @@ GNU General Public License for more details.
 #define DEFAULT_CUSTOM_DIRECTORY "custom/"
 
 // fallback to this skybox
-#define DEFAULT_SKYBOX_NAME     "desert"
+// Cry of Fear ships no "desert" sky (it relied on Half-Life's), so maps without a skyname got no sky
+#define DEFAULT_SKYBOX_NAME     "blue22"
 
 // playlist for startup videos
 #define DEFAULT_VIDEOLIST_PATH	"media/StartupVids.txt"

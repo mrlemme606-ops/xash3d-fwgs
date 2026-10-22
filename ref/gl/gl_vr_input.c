@@ -1,6 +1,6 @@
 /*
 gl_vr_input.c - SteamVR controller polling (legacy controller state)
-Cry of Fear VR project, milestone 2a: walk, turn and press buttons.
+Cry of Fear VR project, milestone 2: walk, turn, press buttons.
 Copyright (C) 2026 contributors
 
 This program is free software: you can redistribute it and/or modify
@@ -61,7 +61,7 @@ static void VR_Stick( float x, float y, float *ox, float *oy )
 	*oy = y * len;
 }
 
-void VR_InputPoll( float head_yaw_relative )
+void VR_InputPoll( float head_yaw_relative, float head_pitch, qboolean physical_crouch )
 {
 	struct VR_IVRSystem_FnTable *sys = (struct VR_IVRSystem_FnTable *)VR_GetSystemTable();
 	VRControllerState_t left, right;
@@ -115,18 +115,14 @@ void VR_InputPoll( float head_yaw_relative )
 		VR_Stick( left.rAxis[0].x, left.rAxis[0].y, &mx, &my );
 	}
 
-	// stick up = walk where the head is looking. Express that in the body (mouse yaw) frame.
-	{
-		float c = cos( DEG2RAD( head_yaw_relative ));
-		float s = sin( DEG2RAD( head_yaw_relative ));
-		float fwd = my * c + mx * s;
-		float side = -my * s + mx * c;
-
-		gEngfuncs.Cvar_SetValue( "vr_in_move_fwd", fwd );
-		gEngfuncs.Cvar_SetValue( "vr_in_move_side", side );
-	}
-
+	// raw sticks. the engine decides how to rotate them (see vr_aim_gaze in in_vr.c)
+	gEngfuncs.Cvar_SetValue( "vr_in_move_fwd", my );
+	gEngfuncs.Cvar_SetValue( "vr_in_move_side", mx );
 	gEngfuncs.Cvar_SetValue( "vr_in_turn", tx );
+	gEngfuncs.Cvar_SetValue( "vr_in_stick_y", ty );
+	gEngfuncs.Cvar_SetValue( "vr_in_head_yaw", head_yaw_relative );
+	gEngfuncs.Cvar_SetValue( "vr_in_head_pitch", head_pitch );
+	gEngfuncs.Cvar_SetValue( "vr_in_crouch", physical_crouch ? 1.0f : 0.0f );
 	gEngfuncs.Cvar_SetValue( "vr_in_buttons", (float)buttons );
 	gEngfuncs.Cvar_SetValue( "vr_in_active", ( haveLeft || haveRight ) ? 1.0f : 0.0f );
 }

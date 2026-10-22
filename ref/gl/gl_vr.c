@@ -37,6 +37,10 @@ Interface versions: IVRSystem_019, IVRCompositor_022 (both still served by curre
 #define VR_FN
 #endif
 
+#ifndef GL_COLOR_CLEAR_VALUE
+#define GL_COLOR_CLEAR_VALUE	0x0C22
+#endif
+
 #define VR_MAX_DEVICES		64
 #define VR_HMD_INDEX		0
 #define VR_INIT_NONE		0
@@ -105,10 +109,13 @@ static CVAR_DEFINE_AUTO( vr_worldscale, "39.37", 0, "game units per meter (GoldS
 static CVAR_DEFINE_AUTO( vr_flip_roll, "0", 0, "set to 1 if head roll is inverted" );
 static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotation only), useful for diagnosing warping" );
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
+static CVAR_DEFINE_AUTO( vr_crouch_height, "0.35", 0, "meters below your recentered height that count as physically crouching" );
+static CVAR_DEFINE_AUTO( vr_physical_crouch, "1", 0, "1 = crouching in real life crouches in the game" );
 static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
 
 static struct
 {
+	pfnVR_GetGenericInterface	get_interface;
 	qboolean	initialized;
 	qboolean	failed;
 	qboolean	frame_done;	// one stereo frame per engine frame
@@ -188,7 +195,10 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_positional );
 	gEngfuncs.Cvar_RegisterVariable( &vr_fov_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_debug );
+	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_height );
+	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
 	VR_InputInitCvars();
+	VR_UIInitCvars();
 	gEngfuncs.Cmd_AddCommand( "vr_recenter", VR_Recenter_f, "recenter the VR view on the current head position and direction" );
 }
 
@@ -211,6 +221,8 @@ static void VR_Init( void )
 	initInternal = (pfnVR_InitInternal)gEngfuncs.COM_GetProcAddress( vr.lib, "VR_InitInternal" );
 	getInterface = (pfnVR_GetGenericInterface)gEngfuncs.COM_GetProcAddress( vr.lib, "VR_GetGenericInterface" );
 	isHmdPresent = (pfnVR_IsHmdPresent)gEngfuncs.COM_GetProcAddress( vr.lib, "VR_IsHmdPresent" );
+
+	vr.get_interface = getInterface;
 
 	if( !initInternal || !getInterface )
 	{
@@ -269,6 +281,9 @@ static void VR_Init( void )
 	}
 
 	vr.initialized = true;
+
+	// the game's view bobbing moves the camera, which is nauseating when the camera is your head
+	gEngfuncs.Cvar_SetValue( "cl_bob", 0.0f );
 	gEngfuncs.Con_Printf( "VR: SteamVR initialized. Eye FOV tangents L: %.2f %.2f %.2f %.2f\n",
 		vr.tan_frustum[0][0], vr.tan_frustum[0][1], vr.tan_frustum[0][2], vr.tan_frustum[0][3] );
 }
@@ -336,8 +351,14 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 
 	{
 		float rel = RAD2DEG( atan2( vr.axis_fwd[1], vr.axis_fwd[0] )) - vr.ref_yaw;
+		float xy = sqrt( vr.axis_fwd[0] * vr.axis_fwd[0] + vr.axis_fwd[1] * vr.axis_fwd[1] );
+		float pitch = RAD2DEG( atan2( -vr.axis_fwd[2], xy ));
+		qboolean crouch = vr_physical_crouch.value && ( vr.head_pos[1] < vr.ref_head_ovr[1] - vr_crouch_height.value );
 
-		VR_InputPoll( rel );
+		while( rel > 180.0f ) rel -= 360.0f;
+		while( rel < -180.0f ) rel += 360.0f;
+
+		VR_InputPoll( rel, pitch, crouch );
 	}
 
 	return true;
@@ -346,6 +367,26 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 void *VR_GetSystemTable( void )
 {
 	return vr.system;
+}
+
+qboolean VR_IsActive( void )
+{
+	return vr.initialized && vr_enable.value;
+}
+
+void *VR_GetInterface( const char *fntable_name )
+{
+	int err = 0;
+
+	if( !vr.get_interface )
+		return NULL;
+
+	return (void *)vr.get_interface( fntable_name, &err );
+}
+
+void VR_GetHeadMatrix( float m[3][4] )
+{
+	memcpy( m, vr.poses[VR_HMD_INDEX].mDeviceToAbsoluteTracking.m, sizeof( float ) * 12 );
 }
 
 void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
@@ -489,6 +530,26 @@ void VR_FinishFrame( void )
 
 	pglFlush();
 	vr.frame_done = true;
+
+	// The eye images are captured. Clear the window to transparent so that everything the engine
+	// draws next (HUD, menus, subtitles) lands on its own and can be shown on the floating UI panel.
+	{
+		GLfloat clear[4];
+		GLboolean scissor = pglIsEnabled( GL_SCISSOR_TEST );
+
+		pglGetFloatv( GL_COLOR_CLEAR_VALUE, clear );
+
+		if( scissor )
+			pglDisable( GL_SCISSOR_TEST );
+
+		pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+		pglClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
+		pglClear( GL_COLOR_BUFFER_BIT );
+		pglClearColor( clear[0], clear[1], clear[2], clear[3] );
+
+		if( scissor )
+			pglEnable( GL_SCISSOR_TEST );
+	}
 
 	if( vr_debug.value && ++vr.debug_frames >= 72 )
 	{

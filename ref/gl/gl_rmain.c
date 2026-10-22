@@ -1177,6 +1177,9 @@ R_EndFrame
 */
 void R_EndFrame( void )
 {
+	// VR: show the 2D layer (HUD, menus, subtitles) on the floating panel
+	VR_UIUpdate();
+
 	GL_PresentScreenTarget();
 #if XASH_PSVITA
 	VGL_ShimEndFrame();
