@@ -110,7 +110,9 @@ static CVAR_DEFINE_AUTO( vr_flip_roll, "0", 0, "set to 1 if head roll is inverte
 static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotation only), useful for diagnosing warping" );
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.35", 0, "meters below your recentered height that count as physically crouching" );
-static CVAR_DEFINE_AUTO( vr_physical_crouch, "1", 0, "1 = crouching in real life crouches in the game" );
+static CVAR_DEFINE_AUTO( vr_physical_crouch, "0", 0, "1 = crouching in real life also crouches the character (the view then drops twice, see notes)" );
+static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting the eye images (matches Valve's sample)" );
+static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
 static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
 
 static struct
@@ -197,6 +199,8 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_height );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
+	gEngfuncs.Cvar_RegisterVariable( &vr_finish );
+	gEngfuncs.Cvar_RegisterVariable( &vr_ipd_scale );
 	VR_InputInitCvars();
 	VR_UIInitCvars();
 	gEngfuncs.Cmd_AddCommand( "vr_recenter", VR_Recenter_f, "recenter the VR view on the current head position and direction" );
@@ -392,7 +396,7 @@ void VR_GetHeadMatrix( float m[3][4] )
 void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 {
 	const HmdMatrix34_t *m = &vr.poses[VR_HMD_INDEX].mDeviceToAbsoluteTracking;
-	const float *t = vr.eye_offset[eye];
+	float t[3] = { vr.eye_offset[eye][0] * vr_ipd_scale.value, vr.eye_offset[eye][1] * vr_ipd_scale.value, vr.eye_offset[eye][2] * vr_ipd_scale.value };
 	float ep[3];
 	vec3_t eyepos, offset, fwd, left, up;
 	float d, xy, tan_x, tan_y;
@@ -529,6 +533,10 @@ void VR_FinishFrame( void )
 	}
 
 	pglFlush();
+
+	if( vr_finish.value )
+		pglFinish();
+
 	vr.frame_done = true;
 
 	// The eye images are captured. Clear the window to transparent so that everything the engine

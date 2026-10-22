@@ -31,6 +31,7 @@ static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
 static CVAR_DEFINE_AUTO( vr_turn_mode, "0", FCVAR_ARCHIVE, "0 = snap turn, 1 = smooth turn" );
 static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in degrees" );
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
+static CVAR_DEFINE_AUTO( vr_move_digital, "1", FCVAR_ARCHIVE, "1 = the left stick presses your forward/back/left/right keys (works with ladders and the boat), 0 = analog speed" );
 static CVAR_DEFINE_AUTO( vr_aim_gaze, "1", FCVAR_ARCHIVE, "1 = the game's aim, use and walking direction follow your head. Temporary until hand aiming exists" );
 
 // which key each controller button presses. single character, or mouse1/2/3, space, ctrl, shift, enter, tab, escape. empty = nothing
@@ -44,6 +45,10 @@ static CVAR_DEFINE_AUTO( vr_key_x, "tab", FCVAR_ARCHIVE, "key for X (left contro
 static CVAR_DEFINE_AUTO( vr_key_y, "i", FCVAR_ARCHIVE, "key for Y (left controller)" );
 static CVAR_DEFINE_AUTO( vr_key_lstick, "shift", FCVAR_ARCHIVE, "key for left stick click (sprint)" );
 static CVAR_DEFINE_AUTO( vr_key_rstick, "", FCVAR_ARCHIVE, "key for right stick click (left free, reserved for magazine eject)" );
+static CVAR_DEFINE_AUTO( vr_key_forward, "w", FCVAR_ARCHIVE, "key pressed when the left stick goes forward" );
+static CVAR_DEFINE_AUTO( vr_key_back, "s", FCVAR_ARCHIVE, "key pressed when the left stick goes back" );
+static CVAR_DEFINE_AUTO( vr_key_left, "a", FCVAR_ARCHIVE, "key pressed when the left stick goes left" );
+static CVAR_DEFINE_AUTO( vr_key_right, "d", FCVAR_ARCHIVE, "key pressed when the left stick goes right" );
 static CVAR_DEFINE_AUTO( vr_key_jump, "space", FCVAR_ARCHIVE, "key for jump (right stick up)" );
 static CVAR_DEFINE_AUTO( vr_key_crouch, "ctrl", FCVAR_ARCHIVE, "key for crouch (right stick down toggles, or physically crouch)" );
 
@@ -52,6 +57,7 @@ enum
 	VRB_RTRIGGER = 0, VRB_LTRIGGER, VRB_RGRIP, VRB_LGRIP, VRB_A, VRB_B, VRB_X, VRB_Y, VRB_LSTICK, VRB_RSTICK,
 	VRB_JUMP,	// made here from the right stick flick, not published by the renderer
 	VRB_CROUCH,	// likewise
+	VRB_FORWARD, VRB_BACK, VRB_LEFT, VRB_RIGHT,	// left stick as keys (digital walking)
 	VRB_COUNT
 };
 
@@ -59,7 +65,8 @@ static convar_t *vr_key_cvars[VRB_COUNT] =
 {
 	&vr_key_rtrigger, &vr_key_ltrigger, &vr_key_rgrip, &vr_key_lgrip, &vr_key_a,
 	&vr_key_b, &vr_key_x, &vr_key_y, &vr_key_lstick, &vr_key_rstick,
-	&vr_key_jump, &vr_key_crouch
+	&vr_key_jump, &vr_key_crouch,
+	&vr_key_forward, &vr_key_back, &vr_key_left, &vr_key_right
 };
 
 static int vr_pressed_key[VRB_COUNT];	// key code sent on press, 0 = not held
@@ -68,6 +75,7 @@ static qboolean vr_snap_latched;
 static qboolean vr_up_latched, vr_down_latched;
 static qboolean vr_crouch_toggled;
 static int vr_jump_frames;
+static qboolean vr_dir_down[4];	// forward, back, left, right (with hysteresis)
 
 static int IN_VRKeyFromName( const char *name )
 {
@@ -114,6 +122,7 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_snap_angle );
 	Cvar_RegisterVariable( &vr_smooth_speed );
 	Cvar_RegisterVariable( &vr_aim_gaze );
+	Cvar_RegisterVariable( &vr_move_digital );
 
 	for( i = 0; i < VRB_COUNT; i++ )
 		Cvar_RegisterVariable( vr_key_cvars[i] );
@@ -135,6 +144,7 @@ static void IN_VRReleaseAll( void )
 	vr_prev_buttons = 0;
 	vr_crouch_toggled = false;
 	vr_jump_frames = 0;
+	memset( vr_dir_down, 0, sizeof( vr_dir_down ));
 }
 
 static void IN_VRUpdateButtons( int buttons )
@@ -171,11 +181,37 @@ static void IN_VRUpdateButtons( int buttons )
 	vr_prev_buttons = buttons;
 }
 
+// the stick direction (already in the direction the game walks) -> forward/side, -1..1
+static void IN_VRWalkVector( float *fwd, float *side )
+{
+	*fwd = vr_in_move_fwd.value;
+	*side = vr_in_move_side.value;
+
+	// without gaze aim the game walks along the body, so rotate the stick by where the head points
+	if( !vr_aim_gaze.value )
+	{
+		float a = DEG2RAD( vr_in_head_yaw.value );
+		float c = cos( a ), s = sin( a );
+		float f2 = *fwd * c + *side * s;
+
+		*side = -*fwd * s + *side * c;
+		*fwd = f2;
+	}
+}
+
+static qboolean IN_VRHysteresis( qboolean was_down, float value )
+{
+	if( value > 0.55f ) return true;
+	if( value < 0.35f ) return false;
+	return was_down;
+}
+
 void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 {
 	float yaw = 0.0f;
 	float x, y, fwd, side;
 	int buttons;
+	qboolean in_game;
 
 	if( vr_in_active.value <= 0.0f )
 	{
@@ -183,6 +219,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		return;
 	}
 
+	in_game = active && cls.key_dest == key_game && !cl.paused && !cl.intermission;
 	buttons = (int)vr_in_buttons.value;
 
 	// right stick flicks: up = jump (a short key press), down = toggle crouch
@@ -217,9 +254,30 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	if( vr_crouch_toggled || vr_in_crouch.value > 0.0f )
 		buttons |= BIT( VRB_CROUCH );
 
+	IN_VRWalkVector( &fwd, &side );
+
+	// digital walking: press the player's own movement keys, so everything the keyboard can do
+	// (ladders, the boat, Cry of Fear's own key handling) works with the stick too
+	if( vr_move_digital.value && in_game )
+	{
+		vr_dir_down[0] = IN_VRHysteresis( vr_dir_down[0], fwd );
+		vr_dir_down[1] = IN_VRHysteresis( vr_dir_down[1], -fwd );
+		vr_dir_down[2] = IN_VRHysteresis( vr_dir_down[2], -side );
+		vr_dir_down[3] = IN_VRHysteresis( vr_dir_down[3], side );
+
+		if( vr_dir_down[0] ) buttons |= BIT( VRB_FORWARD );
+		if( vr_dir_down[1] ) buttons |= BIT( VRB_BACK );
+		if( vr_dir_down[2] ) buttons |= BIT( VRB_LEFT );
+		if( vr_dir_down[3] ) buttons |= BIT( VRB_RIGHT );
+	}
+	else
+	{
+		memset( vr_dir_down, 0, sizeof( vr_dir_down ));
+	}
+
 	IN_VRUpdateButtons( buttons );
 
-	if( !active || cls.key_dest != key_game || cl.paused || cl.intermission )
+	if( !in_game )
 		return;
 
 	// turning (snap or smooth) changes the body direction, the same way the mouse does
@@ -246,28 +304,17 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		VectorCopy( cmd->viewangles, cl.viewangles );
 	}
 
-	// walking. with gaze aim the game already walks where the head points, otherwise rotate the stick
-	fwd = vr_in_move_fwd.value;
-	side = vr_in_move_side.value;
-
-	if( !vr_aim_gaze.value )
+	// analog walking (only when digital walking is off; the keys already move the player otherwise)
+	if( !vr_move_digital.value )
 	{
-		float a = DEG2RAD( vr_in_head_yaw.value );
-		float c = cos( a ), s = sin( a );
-		float f2 = fwd * c + side * s;
+		cmd->forwardmove += fwd * Cvar_VariableValue( "cl_forwardspeed" );
+		cmd->sidemove += side * Cvar_VariableValue( "cl_sidespeed" );
 
-		side = -fwd * s + side * c;
-		fwd = f2;
+		if( fwd > 0.3f ) SetBits( cmd->buttons, IN_FORWARD );
+		if( fwd < -0.3f ) SetBits( cmd->buttons, IN_BACK );
+		if( side > 0.3f ) SetBits( cmd->buttons, IN_MOVERIGHT );
+		if( side < -0.3f ) SetBits( cmd->buttons, IN_MOVELEFT );
 	}
-
-	cmd->forwardmove += fwd * Cvar_VariableValue( "cl_forwardspeed" );
-	cmd->sidemove += side * Cvar_VariableValue( "cl_sidespeed" );
-
-	// Cry of Fear's ladders and boat read these buttons, not the move values
-	if( fwd > 0.3f ) SetBits( cmd->buttons, IN_FORWARD );
-	if( fwd < -0.3f ) SetBits( cmd->buttons, IN_BACK );
-	if( side > 0.3f ) SetBits( cmd->buttons, IN_MOVERIGHT );
-	if( side < -0.3f ) SetBits( cmd->buttons, IN_MOVELEFT );
 
 	// gaze aim: what the game aims, uses and walks along is where the head looks.
 	// cl.viewangles stays the body direction, so the headset view does not feed back into itself.
