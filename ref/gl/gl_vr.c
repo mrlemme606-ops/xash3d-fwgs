@@ -113,6 +113,7 @@ static CVAR_DEFINE_AUTO( vr_crouch_height, "0.35", 0, "meters below your recente
 static CVAR_DEFINE_AUTO( vr_physical_crouch, "0", 0, "1 = crouching in real life also crouches the character (the view then drops twice, see notes)" );
 static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting the eye images (matches Valve's sample)" );
 static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
+static CVAR_DEFINE_AUTO( vr_testscene, "0", 0, "diagnostic: 1 = draw a world-fixed wireframe room over the game, 2 = draw only the room on a dark background" );
 static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
 
 static struct
@@ -142,6 +143,10 @@ static struct
 	vec3_t		axis_fwd, axis_left, axis_up;	// current head basis in game axes (unrotated)
 
 	float		cur_frustum[4];
+
+	vec3_t		game_origin;	// game eye position of the current frame
+	vec3_t		test_origin;	// where the diagnostic room is anchored
+	qboolean	test_anchored;
 
 	GLuint		tex[2];
 	int		tex_w, tex_h;
@@ -197,6 +202,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_positional );
 	gEngfuncs.Cvar_RegisterVariable( &vr_fov_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_debug );
+	gEngfuncs.Cvar_RegisterVariable( &vr_testscene );
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_height );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_finish );
@@ -403,6 +409,7 @@ void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 	int i;
 
 	*out = *game;
+	VectorCopy( game->vieworigin, vr.game_origin );
 
 	// eye position in tracking space: head position + head rotation * eye offset
 	for( i = 0; i < 3; i++ )
@@ -490,11 +497,155 @@ static void VR_ForgetTextureBinding( void )
 	glState.currentTexturesIndex[glState.activeTMU] = -1;
 }
 
+/*
+=================
+Diagnostic: a wireframe room that is fixed in the world, drawn with the same matrices as the game.
+If this room warps when you turn your head, the problem is in how the eye images are made or shown.
+If it stays rock solid while the game world warps, the problem is in what Cry of Fear draws.
+=================
+*/
+static void VR_DrawTestScene( void )
+{
+	const float half = 240.0f, step = 24.0f, height = 192.0f;
+	float proj[16], view[16], clear[4], x;
+	vec3_t o;
+	int saved_tmu, unit;
+
+	if( !vr_testscene.value )
+	{
+		vr.test_anchored = false;
+		return;
+	}
+
+	if( !vr.test_anchored )
+	{
+		VectorCopy( vr.game_origin, vr.test_origin );
+		vr.test_anchored = true;
+	}
+
+	VectorCopy( vr.test_origin, o );
+	o[2] -= 64.0f;	// floor, under the eyes
+
+	Matrix4x4_ToArrayFloatGL( RI.projectionMatrix, proj );
+	Matrix4x4_ToArrayFloatGL( RI.worldviewMatrix, view );
+
+	saved_tmu = glState.activeTMU;
+	pglPushAttrib( GL_ALL_ATTRIB_BITS );
+
+	for( unit = GL_MaxTextureUnits() - 1; unit >= 0; unit-- )
+	{
+		GL_SelectTexture( unit );
+		pglDisable( GL_TEXTURE_2D );
+	}
+
+	pglDisable( GL_BLEND );
+	pglDisable( GL_ALPHA_TEST );
+	pglDisable( GL_CULL_FACE );
+	pglDisable( GL_SCISSOR_TEST );
+	pglEnable( GL_DEPTH_TEST );
+	pglDepthMask( GL_TRUE );
+	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+
+	if( vr_testscene.value >= 2.0f )
+	{
+		pglGetFloatv( GL_COLOR_CLEAR_VALUE, clear );
+		pglClearColor( 0.04f, 0.04f, 0.07f, 1.0f );
+		pglClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+		pglClearColor( clear[0], clear[1], clear[2], clear[3] );
+	}
+
+	pglMatrixMode( GL_PROJECTION );
+	pglPushMatrix();
+	pglLoadMatrixf( proj );
+	pglMatrixMode( GL_MODELVIEW );
+	pglPushMatrix();
+	pglLoadMatrixf( view );
+
+	pglLineWidth( 2.0f );
+	pglBegin( GL_LINES );
+
+	for( x = -half; x <= half; x += step )
+	{
+		// floor grid
+		pglColor3f( 0.9f, 0.3f, 0.3f );
+		pglVertex3f( o[0] + x, o[1] - half, o[2] );
+		pglVertex3f( o[0] + x, o[1] + half, o[2] );
+		pglColor3f( 0.3f, 0.4f, 0.95f );
+		pglVertex3f( o[0] - half, o[1] + x, o[2] );
+		pglVertex3f( o[0] + half, o[1] + x, o[2] );
+
+		// four walls, lines both ways
+		pglColor3f( 0.3f, 0.9f, 0.4f );
+		pglVertex3f( o[0] + x, o[1] + half, o[2] );
+		pglVertex3f( o[0] + x, o[1] + half, o[2] + height );
+		pglVertex3f( o[0] + x, o[1] - half, o[2] );
+		pglVertex3f( o[0] + x, o[1] - half, o[2] + height );
+		pglVertex3f( o[0] + half, o[1] + x, o[2] );
+		pglVertex3f( o[0] + half, o[1] + x, o[2] + height );
+		pglVertex3f( o[0] - half, o[1] + x, o[2] );
+		pglVertex3f( o[0] - half, o[1] + x, o[2] + height );
+	}
+
+	for( x = 0.0f; x <= height; x += step )
+	{
+		pglColor3f( 0.9f, 0.9f, 0.3f );
+		pglVertex3f( o[0] - half, o[1] - half, o[2] + x );
+		pglVertex3f( o[0] + half, o[1] - half, o[2] + x );
+		pglVertex3f( o[0] + half, o[1] - half, o[2] + x );
+		pglVertex3f( o[0] + half, o[1] + half, o[2] + x );
+		pglVertex3f( o[0] + half, o[1] + half, o[2] + x );
+		pglVertex3f( o[0] - half, o[1] + half, o[2] + x );
+		pglVertex3f( o[0] - half, o[1] + half, o[2] + x );
+		pglVertex3f( o[0] - half, o[1] - half, o[2] + x );
+	}
+
+	// a white cross hair box straight ahead (world +X) at 3 m, as a fixed reference
+	pglColor3f( 1.0f, 1.0f, 1.0f );
+	{
+		float cx = o[0] + 118.0f, cy = o[1], cz = o[2] + 64.0f, r = 12.0f;
+		int sx, sy, sz;
+
+		for( sx = -1; sx <= 1; sx += 2 )
+			for( sy = -1; sy <= 1; sy += 2 )
+			{
+				pglVertex3f( cx + sx * r, cy + sy * r, cz - r );
+				pglVertex3f( cx + sx * r, cy + sy * r, cz + r );
+			}
+
+		for( sy = -1; sy <= 1; sy += 2 )
+			for( sz = -1; sz <= 1; sz += 2 )
+			{
+				pglVertex3f( cx - r, cy + sy * r, cz + sz * r );
+				pglVertex3f( cx + r, cy + sy * r, cz + sz * r );
+			}
+
+		for( sx = -1; sx <= 1; sx += 2 )
+			for( sz = -1; sz <= 1; sz += 2 )
+			{
+				pglVertex3f( cx + sx * r, cy - r, cz + sz * r );
+				pglVertex3f( cx + sx * r, cy + r, cz + sz * r );
+			}
+	}
+
+	pglEnd();
+
+	pglMatrixMode( GL_MODELVIEW );
+	pglPopMatrix();
+	pglMatrixMode( GL_PROJECTION );
+	pglPopMatrix();
+	pglMatrixMode( GL_MODELVIEW );
+
+	pglPopAttrib();
+	GL_SelectTexture( saved_tmu );
+}
+
 void VR_EndEyePass( int eye )
 {
 	int w, h;
 
 	vr.in_eye_pass = false;
+
+	VR_DrawTestScene();
 
 	// the scene target (or the window) is still bound from R_SetupGL
 	GL_GetSceneTargetSize( &w, &h );
