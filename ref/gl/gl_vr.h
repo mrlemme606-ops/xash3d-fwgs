@@ -20,6 +20,13 @@ void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 qboolean VR_GetEyeFrustum( float *left, float *right, float *up, float *down );
 void VR_EndEyePass( int eye );
 void VR_FinishFrame( void );
+qboolean VR_GetEyeTarget( GLuint *fbo, int *width, int *height );
+
+// eye render targets, implemented in gl_fbo.c
+qboolean GL_VRCreateEyeTargets( int width, int height );
+void GL_VRFreeEyeTargets( void );
+GLuint GL_VREyeFBO( int eye );
+GLuint GL_VREyeTexture( int eye );
 
 // controller input (gl_vr_input.c)
 void *VR_GetSystemTable( void );

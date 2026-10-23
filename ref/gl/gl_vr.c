@@ -111,6 +111,7 @@ static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotat
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.35", 0, "meters below your recentered height that count as physically crouching" );
 static CVAR_DEFINE_AUTO( vr_physical_crouch, "0", 0, "1 = crouching in real life also crouches the character (the view then drops twice, see notes)" );
+static CVAR_DEFINE_AUTO( vr_render_scale, "1.0", 0, "eye image size relative to what SteamVR recommends (needs a new map load or vid_restart to change)" );
 static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting the eye images (matches Valve's sample)" );
 static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
 static CVAR_DEFINE_AUTO( vr_testscene, "0", 0, "diagnostic: 1 = draw a world-fixed wireframe room over the game, 2 = draw only the room on a dark background" );
@@ -150,6 +151,11 @@ static struct
 
 	GLuint		tex[2];
 	int		tex_w, tex_h;
+
+	qboolean	use_fbo;	// eyes are rendered into their own buffers (otherwise: copied out of the window)
+	qboolean	fbo_failed;
+	int		eye_w, eye_h;
+	int		cur_eye;
 } vr;
 
 /*
@@ -206,6 +212,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_height );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_finish );
+	gEngfuncs.Cvar_RegisterVariable( &vr_render_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_ipd_scale );
 	VR_InputInitCvars();
 	VR_UIInitCvars();
@@ -329,6 +336,8 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 	if( !hmd->bPoseIsValid )
 		return false;
 
+	VR_EnsureEyeTargets();
+
 	m = &hmd->mDeviceToAbsoluteTracking;
 	p[0] = m->m[0][3]; p[1] = m->m[1][3]; p[2] = m->m[2][3];
 	VectorCopy( p, vr.head_pos );
@@ -399,6 +408,62 @@ void VR_GetHeadMatrix( float m[3][4] )
 	memcpy( m, vr.poses[VR_HMD_INDEX].mDeviceToAbsoluteTracking.m, sizeof( float ) * 12 );
 }
 
+qboolean VR_GetEyeTarget( GLuint *fbo, int *width, int *height )
+{
+	if( !vr.in_eye_pass || !vr.use_fbo )
+		return false;
+
+	if( fbo ) *fbo = GL_VREyeFBO( vr.cur_eye );
+	if( width ) *width = vr.eye_w;
+	if( height ) *height = vr.eye_h;
+	return true;
+}
+
+static void VR_EnsureEyeTargets( void )
+{
+	uint32_t rw = 0, rh = 0;
+	int w, h, i;
+
+	if( vr.fbo_failed )
+		return;
+
+	vr.system->GetRecommendedRenderTargetSize( &rw, &rh );
+
+	w = (int)( rw * vr_render_scale.value );
+	h = (int)( rh * vr_render_scale.value );
+	w = bound( 256, w, 8192 ) & ~1;
+	h = bound( 256, h, 8192 ) & ~1;
+
+	if( vr.use_fbo && vr.eye_w == w && vr.eye_h == h )
+		return;
+
+	if( !GL_VRCreateEyeTargets( w, h ))
+	{
+		gEngfuncs.Con_Printf( S_ERROR "VR: can't create %dx%d eye buffers, using the window instead (lower quality)\n", w, h );
+		vr.fbo_failed = true;
+		vr.use_fbo = false;
+		return;
+	}
+
+	// the compositor samples these textures as they are, so they need sane filtering
+	for( i = 0; i < 2; i++ )
+	{
+		pglBindTexture( GL_TEXTURE_2D, GL_VREyeTexture( i ));
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+	}
+
+	glState.currentTextures[glState.activeTMU] = -1;
+	glState.currentTexturesIndex[glState.activeTMU] = -1;
+
+	vr.eye_w = w;
+	vr.eye_h = h;
+	vr.use_fbo = true;
+	gEngfuncs.Con_Printf( "VR: rendering each eye at %dx%d\n", w, h );
+}
+
 void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 {
 	const HmdMatrix34_t *m = &vr.poses[VR_HMD_INDEX].mDeviceToAbsoluteTracking;
@@ -449,7 +514,30 @@ void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 	out->fov_x = 2.0f * RAD2DEG( atan( tan_x ));
 	out->fov_y = 2.0f * RAD2DEG( atan( tan_y ));
 
+	vr.cur_eye = eye;
 	vr.in_eye_pass = true;
+
+	if( vr.use_fbo )
+	{
+		// start from a clean buffer: nothing from the previous frame may show through
+		GLfloat clear[4];
+		GLboolean scissor = pglIsEnabled( GL_SCISSOR_TEST );
+
+		pglGetFloatv( GL_COLOR_CLEAR_VALUE, clear );
+		pglBindFramebuffer( GL_FRAMEBUFFER, GL_VREyeFBO( eye ));
+
+		if( scissor )
+			pglDisable( GL_SCISSOR_TEST );
+
+		pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+		pglDepthMask( GL_TRUE );
+		pglClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
+		pglClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+		pglClearColor( clear[0], clear[1], clear[2], clear[3] );
+
+		if( scissor )
+			pglEnable( GL_SCISSOR_TEST );
+	}
 }
 
 qboolean VR_GetEyeFrustum( float *left, float *right, float *up, float *down )
@@ -647,6 +735,9 @@ void VR_EndEyePass( int eye )
 
 	VR_DrawTestScene();
 
+	if( vr.use_fbo )
+		return;	// already rendered into the eye's own buffer
+
 	// the scene target (or the window) is still bound from R_SetupGL
 	GL_GetSceneTargetSize( &w, &h );
 	VR_EnsureTextures( w, h );
@@ -660,6 +751,9 @@ void VR_FinishFrame( void )
 {
 	int eye;
 
+	if( vr.use_fbo )
+		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+
 	pglFlush();
 
 	for( eye = 0; eye < 2; eye++ )
@@ -668,7 +762,7 @@ void VR_FinishFrame( void )
 		VRTextureBounds_t bounds;
 		int err;
 
-		tex.handle = (void *)(uintptr_t)vr.tex[eye];
+		tex.handle = (void *)(uintptr_t)( vr.use_fbo ? GL_VREyeTexture( eye ) : vr.tex[eye] );
 		tex.eType = VR_TEXTURE_OPENGL;
 		tex.eColorSpace = VR_COLORSPACE_GAMMA;
 

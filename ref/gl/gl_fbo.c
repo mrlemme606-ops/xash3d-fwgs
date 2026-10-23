@@ -14,6 +14,7 @@ GNU General Public License for more details.
 */
 
 #include "gl_local.h"
+#include "gl_vr.h"
 
 #if !XASH_GLES || !XASH_GL_STATIC
 static void GL_FreeRenderTarget( gl_rendertarget_t *target )
@@ -169,6 +170,10 @@ window size when render targets are inactive
 */
 void GL_GetSceneTargetSize( int *width, int *height )
 {
+	// VR: while an eye is being drawn the "scene" is that eye's own buffer
+	if( VR_GetEyeTarget( NULL, width, height ))
+		return;
+
 	if( !GL_RenderTargetsActive( ))
 	{
 		*width = gpGlobals->width;
@@ -322,6 +327,14 @@ binds the surface 3D passes draw into
 */
 void GL_BindSceneTarget( void )
 {
+	GLuint vr_fbo;
+
+	if( VR_GetEyeTarget( &vr_fbo, NULL, NULL ))
+	{
+		pglBindFramebuffer( GL_FRAMEBUFFER, vr_fbo );
+		return;
+	}
+
 	if( !GL_RenderTargetsActive( ))
 		return;
 
@@ -410,6 +423,52 @@ void GL_PresentScreenTarget( void )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
 		GL_DrawTargetQuad( screen, screen->width, screen->height, GL_NEAREST );
 	}
+}
+
+/*
+================
+VR eye buffers (see gl_vr.c)
+
+one color texture plus depth/stencil per eye, at the size SteamVR recommends
+================
+*/
+static gl_rendertarget_t vr_eye_targets[2];
+
+void GL_VRFreeEyeTargets( void )
+{
+	GL_FreeRenderTarget( &vr_eye_targets[0] );
+	GL_FreeRenderTarget( &vr_eye_targets[1] );
+}
+
+qboolean GL_VRCreateEyeTargets( int width, int height )
+{
+	GL_VRFreeEyeTargets();
+
+	if( !GL_CreateRenderTarget( &vr_eye_targets[0], "*vr_eye_left", width, height, 0, RT_COLOR_TEXTURE | RT_DEPTH ))
+		return false;
+
+	if( !GL_CreateRenderTarget( &vr_eye_targets[1], "*vr_eye_right", width, height, 0, RT_COLOR_TEXTURE | RT_DEPTH ))
+	{
+		GL_VRFreeEyeTargets();
+		return false;
+	}
+
+	return true;
+}
+
+GLuint GL_VREyeFBO( int eye )
+{
+	return vr_eye_targets[eye & 1].fbo;
+}
+
+GLuint GL_VREyeTexture( int eye )
+{
+	const gl_rendertarget_t *rt = &vr_eye_targets[eye & 1];
+
+	if( !rt->texnum )
+		return 0;
+
+	return R_GetTexture( rt->texnum )->texnum;
 }
 
 #endif // !XASH_GLES || !XASH_GL_STATIC
