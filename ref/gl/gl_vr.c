@@ -37,6 +37,10 @@ Interface versions: IVRSystem_019, IVRCompositor_022 (both still served by curre
 #define VR_FN
 #endif
 
+#ifndef GL_VIEWPORT
+#define GL_VIEWPORT		0x0BA2
+#endif
+
 #ifndef GL_COLOR_CLEAR_VALUE
 #define GL_COLOR_CLEAR_VALUE	0x0C22
 #endif
@@ -111,6 +115,7 @@ static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotat
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.35", 0, "meters below your recentered height that count as physically crouching" );
 static CVAR_DEFINE_AUTO( vr_physical_crouch, "0", 0, "1 = crouching in real life also crouches the character (the view then drops twice, see notes)" );
+static CVAR_DEFINE_AUTO( vr_use_fbo, "0", 0, "1 = render each eye into its own buffer at SteamVR's recommended size (experimental). 0 = render in the window and copy" );
 static CVAR_DEFINE_AUTO( vr_render_scale, "1.0", 0, "eye image size relative to what SteamVR recommends (needs a new map load or vid_restart to change)" );
 static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting the eye images (matches Valve's sample)" );
 static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
@@ -134,6 +139,11 @@ static struct
 
 	float		tan_frustum[2][4];	// per eye: left, right, up, down (tangents, left/down negative)
 	float		eye_offset[2][3];	// eye position in head space, meters (OpenVR axes)
+	float		eye_rot[2][3][3];	// eye orientation relative to the head (identity on most headsets)
+	float		eye_rot_deg[2];	// how far each eye is rotated from the head, degrees (diagnostic)
+	int		dbg_viewport[2][4];
+	uint32_t	rec_w, rec_h;
+	int		err_prints;
 
 	vec3_t		ref_pos;	// head position when recentered (game axes, units)
 	float		ref_head_ovr[3];	// head position when recentered (OpenVR axes, meters)
@@ -215,6 +225,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_finish );
 	gEngfuncs.Cvar_RegisterVariable( &vr_render_scale );
+	gEngfuncs.Cvar_RegisterVariable( &vr_use_fbo );
 	gEngfuncs.Cvar_RegisterVariable( &vr_ipd_scale );
 	VR_InputInitCvars();
 	VR_UIInitCvars();
@@ -312,6 +323,43 @@ void VR_NewFrame( void )
 	vr.frame_done = false;
 }
 
+/*
+=================
+SteamVR can change the field of view and the eye transform while running (IPD changes, render
+resolution changes, headset finishing its start-up). Valve's sample re-reads them every frame, so do we.
+=================
+*/
+static void VR_UpdateEyeParams( void )
+{
+	int eye, i, j;
+
+	for( eye = 0; eye < 2; eye++ )
+	{
+		float l, r, t, b, trace;
+		HmdMatrix34_t e;
+
+		vr.system->GetProjectionRaw( eye, &l, &r, &t, &b );
+		vr.tan_frustum[eye][0] = l;
+		vr.tan_frustum[eye][1] = r;
+		vr.tan_frustum[eye][2] = -t;
+		vr.tan_frustum[eye][3] = -b;
+
+		e = vr.system->GetEyeToHeadTransform( eye );
+
+		for( i = 0; i < 3; i++ )
+		{
+			vr.eye_offset[eye][i] = e.m[i][3];
+
+			for( j = 0; j < 3; j++ )
+				vr.eye_rot[eye][i][j] = e.m[i][j];
+		}
+
+		trace = e.m[0][0] + e.m[1][1] + e.m[2][2];
+		trace = bound( -1.0f, ( trace - 1.0f ) * 0.5f, 1.0f );
+		vr.eye_rot_deg[eye] = RAD2DEG( acos( trace ));
+	}
+}
+
 qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 {
 	const TrackedDevicePose_t *hmd;
@@ -332,7 +380,14 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 		return false;
 
 	// blocks until it is time to start rendering the next frame
-	vr.compositor->WaitGetPoses( vr.poses, VR_MAX_DEVICES, NULL, 0 );
+	{
+		int wait_err = vr.compositor->WaitGetPoses( vr.poses, VR_MAX_DEVICES, NULL, 0 );
+
+		if( wait_err != VR_COMPOSITOR_OK && vr.err_prints++ < 10 )
+			gEngfuncs.Con_Printf( S_ERROR "VR: WaitGetPoses failed (code %d)\n", wait_err );
+	}
+
+	VR_UpdateEyeParams();
 	hmd = &vr.poses[VR_HMD_INDEX];
 
 	if( !hmd->bPoseIsValid )
@@ -426,10 +481,18 @@ static void VR_EnsureEyeTargets( void )
 	uint32_t rw = 0, rh = 0;
 	int w, h, i;
 
+	if( !vr_use_fbo.value )
+	{
+		vr.use_fbo = false;
+		return;
+	}
+
 	if( vr.fbo_failed )
 		return;
 
 	vr.system->GetRecommendedRenderTargetSize( &rw, &rh );
+	vr.rec_w = rw;
+	vr.rec_h = rh;
 
 	w = (int)( rw * vr_render_scale.value );
 	h = (int)( rh * vr_render_scale.value );
@@ -438,6 +501,8 @@ static void VR_EnsureEyeTargets( void )
 
 	if( vr.use_fbo && vr.eye_w == w && vr.eye_h == h )
 		return;
+
+	pglFinish();
 
 	if( !GL_VRCreateEyeTargets( w, h ))
 	{
@@ -492,10 +557,35 @@ void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 	// the mouse/keyboard yaw turns the whole rig; the head only adds to it
 	d = game->viewangles[YAW] - vr.ref_yaw;
 
+	{
+		// eye orientation = head orientation * eye-to-head rotation (identity on most headsets)
+		float R[3][3], right[3], upv[3], back[3], negright[3], forward[3];
+		int a, b, c;
+
+		for( a = 0; a < 3; a++ )
+			for( b = 0; b < 3; b++ )
+			{
+				R[a][b] = 0.0f;
+
+				for( c = 0; c < 3; c++ )
+					R[a][b] += m->m[a][c] * vr.eye_rot[eye][c][b];
+			}
+
+		right[0] = R[0][0]; right[1] = R[1][0]; right[2] = R[2][0];
+		upv[0] = R[0][1]; upv[1] = R[1][1]; upv[2] = R[2][1];
+		back[0] = R[0][2]; back[1] = R[1][2]; back[2] = R[2][2];
+		negright[0] = -right[0]; negright[1] = -right[1]; negright[2] = -right[2];
+		forward[0] = -back[0]; forward[1] = -back[1]; forward[2] = -back[2];
+
+		VR_ConvDir( forward, fwd );
+		VR_ConvDir( negright, left );
+		VR_ConvDir( upv, up );
+	}
+
 	VR_RotateZ( offset, d, offset );
-	VR_RotateZ( vr.axis_fwd, d, fwd );
-	VR_RotateZ( vr.axis_left, d, left );
-	VR_RotateZ( vr.axis_up, d, up );
+	VR_RotateZ( fwd, d, fwd );
+	VR_RotateZ( left, d, left );
+	VR_RotateZ( up, d, up );
 
 	VectorAdd( game->vieworigin, offset, out->vieworigin );
 
@@ -735,6 +825,9 @@ void VR_EndEyePass( int eye )
 
 	vr.in_eye_pass = false;
 
+	if( vr_debug.value )
+		pglGetIntegerv( GL_VIEWPORT, vr.dbg_viewport[eye & 1] );
+
 	VR_DrawTestScene();
 
 	if( vr.use_fbo )
@@ -775,8 +868,8 @@ void VR_FinishFrame( void )
 
 		err = vr.compositor->Submit( eye, &tex, &bounds, VR_SUBMIT_DEFAULT );
 
-		if( err != VR_COMPOSITOR_OK )
-			gEngfuncs.Con_DPrintf( S_ERROR "VR: Submit failed for eye %d (code %d)\n", eye, (int)err );
+		if( err != VR_COMPOSITOR_OK && vr.err_prints++ < 10 )
+			gEngfuncs.Con_Printf( S_ERROR "VR: Submit failed for eye %d (code %d)\n", eye, (int)err );
 	}
 
 	pglFlush();
@@ -809,10 +902,15 @@ void VR_FinishFrame( void )
 	if( vr_debug.value && ++vr.debug_frames >= 72 )
 	{
 		vr.debug_frames = 0;
-		gEngfuncs.Con_Printf( "VR debug: head %.3f %.3f %.3f m, eye0 tan L%.2f R%.2f U%.2f D%.2f, eye1 tan L%.2f R%.2f U%.2f D%.2f, tex %dx%d, window %dx%d, scale %.2f, fovscale %.2f, positional %d\n",
-			vr.head_pos[0], vr.head_pos[1], vr.head_pos[2],
-			vr.tan_frustum[0][0], vr.tan_frustum[0][1], vr.tan_frustum[0][2], vr.tan_frustum[0][3],
-			vr.tan_frustum[1][0], vr.tan_frustum[1][1], vr.tan_frustum[1][2], vr.tan_frustum[1][3],
-			vr.tex_w, vr.tex_h, gpGlobals->width, gpGlobals->height, vr_worldscale.value, vr_fov_scale.value, (int)vr_positional.value );
+		gEngfuncs.Con_Printf( "VR debug: eye0 tan L%.3f R%.3f U%.3f D%.3f (rot %.2f deg), eye1 tan L%.3f R%.3f U%.3f D%.3f (rot %.2f deg)\n",
+			vr.tan_frustum[0][0], vr.tan_frustum[0][1], vr.tan_frustum[0][2], vr.tan_frustum[0][3], vr.eye_rot_deg[0],
+			vr.tan_frustum[1][0], vr.tan_frustum[1][1], vr.tan_frustum[1][2], vr.tan_frustum[1][3], vr.eye_rot_deg[1] );
+		gEngfuncs.Con_Printf( "VR debug: eye offsets %.4f %.4f %.4f / %.4f %.4f %.4f m, recommended %ux%u, fbo %d (%dx%d), window %dx%d\n",
+			vr.eye_offset[0][0], vr.eye_offset[0][1], vr.eye_offset[0][2], vr.eye_offset[1][0], vr.eye_offset[1][1], vr.eye_offset[1][2],
+			vr.rec_w, vr.rec_h, vr.use_fbo, vr.eye_w, vr.eye_h, gpGlobals->width, gpGlobals->height );
+		gEngfuncs.Con_Printf( "VR debug: GL viewport after eye0 %d %d %d %d, after eye1 %d %d %d %d, head %.3f %.3f %.3f m, scale %.2f, fovscale %.2f\n",
+			vr.dbg_viewport[0][0], vr.dbg_viewport[0][1], vr.dbg_viewport[0][2], vr.dbg_viewport[0][3],
+			vr.dbg_viewport[1][0], vr.dbg_viewport[1][1], vr.dbg_viewport[1][2], vr.dbg_viewport[1][3],
+			vr.head_pos[0], vr.head_pos[1], vr.head_pos[2], vr_worldscale.value, vr_fov_scale.value );
 	}
 }
