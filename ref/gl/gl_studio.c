@@ -14,6 +14,7 @@ GNU General Public License for more details.
 */
 
 #include "gl_local.h"
+#include "gl_vr.h"
 #include "xash3d_mathlib.h"
 #include "const.h"
 #include "r_studioint.h"
@@ -3344,6 +3345,18 @@ void R_DrawViewModel( void )
 	if( !RI.currententity->model )
 		return;
 
+	// VR: draw the weapon where the right hand is
+	vec3_t vr_origin, vr_angles, saved_origin, saved_angles;
+	qboolean vr_hand = VR_GetViewModelPose( vr_origin, vr_angles );
+
+	if( vr_hand )
+	{
+		VectorCopy( view->origin, saved_origin );
+		VectorCopy( view->angles, saved_angles );
+		VectorCopy( vr_origin, view->origin );
+		VectorCopy( vr_angles, view->angles );
+	}
+
 	// adjust the depth range to prevent view model from poking into walls
 	pglDepthRange( gldepthmin, gldepthmin + VIEWMODEL_DEPTH_RANGE * ( gldepthmax - gldepthmin ));
 	RI.currentmodel = RI.currententity->model;
@@ -3361,6 +3374,12 @@ void R_DrawViewModel( void )
 
 	// restore depth range
 	pglDepthRange( gldepthmin, gldepthmax );
+
+	if( vr_hand )
+	{
+		VectorCopy( saved_origin, view->origin );
+		VectorCopy( saved_angles, view->angles );
+	}
 }
 
 /*
