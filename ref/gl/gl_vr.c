@@ -158,6 +158,8 @@ static struct
 	int		cur_eye;
 } vr;
 
+static void VR_EnsureEyeTargets( void );
+
 /*
 =================
 OpenVR (x right, y up, -z forward, meters)  ->  game (x forward, y left, z up)
