@@ -510,6 +510,13 @@ static double Host_CalcFPS( void )
 	{
 		fps = CL_GetDemoFramerate();
 	}
+	else if( Cvar_VariableValue( "vr_paced" ) > 0.0f )
+	{
+		// VR: the headset compositor (IVRCompositor::WaitGetPoses) is the only thing allowed to pace the
+		// frame loop. An engine limiter (fps_max) running at a different rate than the headset refresh
+		// makes frames miss their slot, and SteamVR then reprojects them, which looks like the world warping.
+		fps = 0.0;
+	}
 	else if( Host_IsSinglePlayerGame( ))
 	{
 		// vsync is expected to limit the framerate, but some drivers

@@ -121,6 +121,7 @@ static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting t
 static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
 static CVAR_DEFINE_AUTO( vr_testscene, "0", 0, "diagnostic: 1 = draw a world-fixed wireframe room over the game, 2 = draw only the room on a dark background" );
 static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
+static CVAR_DEFINE_AUTO( vr_paced, "0", 0, "(internal) the last frame was paced by the headset compositor, the engine fps limiter steps aside" );
 
 static struct
 {
@@ -128,6 +129,8 @@ static struct
 	qboolean	initialized;
 	qboolean	failed;
 	qboolean	frame_done;	// one stereo frame per engine frame
+	qboolean	waited;		// WaitGetPoses paced the current engine frame
+	int		published_paced;
 	qboolean	have_ref;
 	qboolean	in_eye_pass;
 
@@ -220,6 +223,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_positional );
 	gEngfuncs.Cvar_RegisterVariable( &vr_fov_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_debug );
+	gEngfuncs.Cvar_RegisterVariable( &vr_paced );
 	gEngfuncs.Cvar_RegisterVariable( &vr_testscene );
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_height );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
@@ -314,13 +318,30 @@ static void VR_Init( void )
 
 	// the game's view bobbing moves the camera, which is nauseating when the camera is your head
 	gEngfuncs.Cvar_SetValue( "cl_bob", 0.0f );
+
+	// The desktop window must never wait for the monitor's vblank: the headset has its own refresh
+	// rate (90/120/144 Hz) and WaitGetPoses is what paces us. With vsync on, the window's SwapBuffers
+	// blocks the render loop at the monitor rate, eye images arrive late or twice, and SteamVR's
+	// reprojection warps the world whenever the head turns.
+	gEngfuncs.Cvar_SetValue( "gl_vsync", 0.0f );
 	gEngfuncs.Con_Printf( "VR: SteamVR initialized. Eye FOV tangents L: %.2f %.2f %.2f %.2f\n",
 		vr.tan_frustum[0][0], vr.tan_frustum[0][1], vr.tan_frustum[0][2], vr.tan_frustum[0][3] );
 }
 
 void VR_NewFrame( void )
 {
+	int paced = vr.waited && vr_enable.value;
+
 	vr.frame_done = false;
+	vr.waited = false;
+
+	// tell the engine (host.c) whether the last frame was paced by WaitGetPoses.
+	// In menus and loading screens nothing waits, so the normal fps limiter stays in charge there
+	if( paced != vr.published_paced )
+	{
+		vr.published_paced = paced;
+		gEngfuncs.Cvar_SetValue( "vr_paced", paced ? 1.0f : 0.0f );
+	}
 }
 
 /*
@@ -385,6 +406,8 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 
 		if( wait_err != VR_COMPOSITOR_OK && vr.err_prints++ < 10 )
 			gEngfuncs.Con_Printf( S_ERROR "VR: WaitGetPoses failed (code %d)\n", wait_err );
+
+		vr.waited = ( wait_err == VR_COMPOSITOR_OK );
 	}
 
 	VR_UpdateEyeParams();
