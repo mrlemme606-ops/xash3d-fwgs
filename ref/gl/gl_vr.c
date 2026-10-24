@@ -120,6 +120,14 @@ static CVAR_DEFINE_AUTO( vr_render_scale, "1.0", 0, "eye image size relative to 
 static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting the eye images (matches Valve's sample)" );
 static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
 static CVAR_DEFINE_AUTO( vr_testscene, "0", 0, "diagnostic: 1 = draw a world-fixed wireframe room over the game, 2 = draw only the room on a dark background" );
+static CVAR_DEFINE_AUTO( vr_hand_pitch, "0", 0, "tilt the controller's pointing direction: positive = down, negative = up (degrees). Adjust until the laser points where your hand naturally points" );
+static CVAR_DEFINE_AUTO( vr_draw_hands, "1", 0, "draw placeholder controllers and the laser pointer" );
+static CVAR_DEFINE_AUTO( vr_hand_weapon, "1", 0, "draw the weapon at your right hand instead of in front of your face" );
+static CVAR_DEFINE_AUTO( vr_vm_grip_x, "6", 0, "where the right hand holds the weapon model (model axes): forward" );
+static CVAR_DEFINE_AUTO( vr_vm_grip_y, "-6", 0, "where the right hand holds the weapon model: left (negative = right)" );
+static CVAR_DEFINE_AUTO( vr_vm_grip_z, "0", 0, "where the right hand holds the weapon model: up" );
+static CVAR_DEFINE_AUTO( vr_vm_flip_roll, "0", 0, "set to 1 if the weapon is rolled the wrong way" );
+static CVAR_DEFINE_AUTO( vr_aim_converge, "96", 0, "distance in units where the game's aim meets your hand's pointing direction" );
 static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
 
 static struct
@@ -166,6 +174,17 @@ static struct
 	qboolean	fbo_failed;
 	int		eye_w, eye_h;
 	int		cur_eye;
+
+	// controllers in game space, plus the pointing ray in tracking space (for the UI laser)
+	struct
+	{
+		qboolean	valid;
+		vec3_t		pos, fwd, left, up;
+		float		origin_t[3], dir_t[3];
+	} hand[2];		// 0 = left, 1 = right
+
+	qboolean	ui_hit;
+	float		ui_dist;	// meters
 } vr;
 
 static void VR_EnsureEyeTargets( void );
@@ -220,6 +239,14 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_positional );
 	gEngfuncs.Cvar_RegisterVariable( &vr_fov_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_debug );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hand_pitch );
+	gEngfuncs.Cvar_RegisterVariable( &vr_draw_hands );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hand_weapon );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_grip_x );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_grip_y );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_grip_z );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_flip_roll );
+	gEngfuncs.Cvar_RegisterVariable( &vr_aim_converge );
 	gEngfuncs.Cvar_RegisterVariable( &vr_testscene );
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_height );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
@@ -360,6 +387,151 @@ static void VR_UpdateEyeParams( void )
 	}
 }
 
+/*
+=================
+Controllers: where they are in the game world (same mapping as the eyes), and where they point.
+=================
+*/
+static void VR_UpdateHands( const ref_viewpass_t *game )
+{
+	float d = game->viewangles[YAW] - vr.ref_yaw;
+	float th = DEG2RAD( vr_hand_pitch.value ), c = cos( th ), s = sin( th );
+	int h, i;
+
+	for( h = 0; h < 2; h++ )
+	{
+		uint32_t dev = VR_InputGetDevice( h );
+		const HmdMatrix34_t *m;
+		float p[3], R[3], U[3], F[3], F2[3], U2[3], negR[3];
+		vec3_t tmp;
+
+		vr.hand[h].valid = false;
+
+		if( dev >= VR_MAX_DEVICES || !vr.poses[dev].bPoseIsValid )
+			continue;
+
+		m = &vr.poses[dev].mDeviceToAbsoluteTracking;
+		p[0] = m->m[0][3]; p[1] = m->m[1][3]; p[2] = m->m[2][3];
+		R[0] = m->m[0][0]; R[1] = m->m[1][0]; R[2] = m->m[2][0];
+		U[0] = m->m[0][1]; U[1] = m->m[1][1]; U[2] = m->m[2][1];
+		F[0] = -m->m[0][2]; F[1] = -m->m[1][2]; F[2] = -m->m[2][2];
+
+		// tilt the pointing direction about the controller's own right axis
+		for( i = 0; i < 3; i++ )
+		{
+			F2[i] = c * F[i] - s * U[i];
+			U2[i] = c * U[i] + s * F[i];
+			negR[i] = -R[i];
+			vr.hand[h].origin_t[i] = p[i];
+			vr.hand[h].dir_t[i] = F2[i];
+		}
+
+		VR_ConvPos( p, tmp );
+		VectorSubtract( tmp, vr.ref_pos, tmp );
+		VR_RotateZ( tmp, d, tmp );
+		VectorAdd( game->vieworigin, tmp, vr.hand[h].pos );
+
+		VR_ConvDir( F2, tmp );
+		VR_RotateZ( tmp, d, vr.hand[h].fwd );
+		VR_ConvDir( negR, tmp );
+		VR_RotateZ( tmp, d, vr.hand[h].left );
+		VR_ConvDir( U2, tmp );
+		VR_RotateZ( tmp, d, vr.hand[h].up );
+
+		vr.hand[h].valid = true;
+	}
+}
+
+// the game aims, uses and shoots along angles we send it. Aim from the head toward the point your hand points at.
+static void VR_PublishAim( const ref_viewpass_t *game )
+{
+	float d = game->viewangles[YAW] - vr.ref_yaw;
+	vec3_t head, tmp, target, aim;
+	float xy, pitch, yaw;
+
+	if( !vr.hand[1].valid )
+	{
+		gEngfuncs.Cvar_SetValue( "vr_in_hand_valid", 0.0f );
+		return;
+	}
+
+	VR_ConvPos( vr.head_pos, tmp );
+	VectorSubtract( tmp, vr.ref_pos, tmp );
+	VR_RotateZ( tmp, d, tmp );
+	VectorAdd( game->vieworigin, tmp, head );
+
+	VectorScale( vr.hand[1].fwd, vr_aim_converge.value, tmp );
+	VectorAdd( vr.hand[1].pos, tmp, target );
+	VectorSubtract( target, head, aim );
+
+	xy = sqrt( aim[0] * aim[0] + aim[1] * aim[1] );
+	pitch = RAD2DEG( atan2( -aim[2], xy ));
+	yaw = RAD2DEG( atan2( aim[1], aim[0] )) - game->viewangles[YAW];
+
+	while( yaw > 180.0f ) yaw -= 360.0f;
+	while( yaw < -180.0f ) yaw += 360.0f;
+
+	gEngfuncs.Cvar_SetValue( "vr_in_hand_pitch", pitch );
+	gEngfuncs.Cvar_SetValue( "vr_in_hand_yaw", yaw );
+	gEngfuncs.Cvar_SetValue( "vr_in_hand_valid", 1.0f );
+}
+
+// does the right hand point at the UI panel? if so, tell the engine where, so it can move the cursor
+static void VR_PublishUI( void )
+{
+	float u = 0.0f, v = 0.0f, dist = 0.0f;
+
+	vr.ui_hit = vr.hand[1].valid && VR_UIRayHit( vr.hand[1].origin_t, vr.hand[1].dir_t, &u, &v, &dist );
+	vr.ui_dist = dist;
+
+	gEngfuncs.Cvar_SetValue( "vr_in_ui_hit", vr.ui_hit ? 1.0f : 0.0f );
+
+	if( vr.ui_hit )
+	{
+		gEngfuncs.Cvar_SetValue( "vr_in_ui_x", u );
+		gEngfuncs.Cvar_SetValue( "vr_in_ui_y", 1.0f - v );	// window coordinates start at the top
+	}
+}
+
+/*
+=================
+The weapon model (viewmodel) is drawn where the right hand is. Called by the renderer while it draws an eye.
+The model's origin is around the player's eye, so shift it by where the hand grips the model.
+=================
+*/
+qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
+{
+	vec3_t shift;
+	float xy, pitch, yaw, roll;
+
+	if( !vr.in_eye_pass || !vr_hand_weapon.value || !vr.hand[1].valid )
+		return false;
+
+	VectorScale( vr.hand[1].fwd, vr_vm_grip_x.value, shift );
+	origin[0] = vr.hand[1].pos[0] - shift[0];
+	origin[1] = vr.hand[1].pos[1] - shift[1];
+	origin[2] = vr.hand[1].pos[2] - shift[2];
+
+	VectorScale( vr.hand[1].left, vr_vm_grip_y.value, shift );
+	VectorSubtract( origin, shift, origin );
+	VectorScale( vr.hand[1].up, vr_vm_grip_z.value, shift );
+	VectorSubtract( origin, shift, origin );
+
+	xy = sqrt( vr.hand[1].fwd[0] * vr.hand[1].fwd[0] + vr.hand[1].fwd[1] * vr.hand[1].fwd[1] );
+	pitch = RAD2DEG( atan2( -vr.hand[1].fwd[2], xy ));
+	yaw = RAD2DEG( atan2( vr.hand[1].fwd[1], vr.hand[1].fwd[0] ));
+	roll = RAD2DEG( atan2( vr.hand[1].left[2], vr.hand[1].up[2] ));
+
+	if( vr_vm_flip_roll.value )
+		roll = -roll;
+
+	// the game stores the viewmodel's pitch negated, the studio renderer undoes that
+	angles[PITCH] = -pitch;
+	angles[YAW] = yaw;
+	angles[ROLL] = roll;
+	return true;
+}
+
 qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 {
 	const TrackedDevicePose_t *hmd;
@@ -436,6 +608,10 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 
 		VR_InputPoll( rel, pitch, crouch );
 	}
+
+	VR_UpdateHands( game );
+	VR_PublishAim( game );
+	VR_PublishUI();
 
 	return true;
 }
@@ -819,6 +995,104 @@ static void VR_DrawTestScene( void )
 	GL_SelectTexture( saved_tmu );
 }
 
+/*
+=================
+Placeholder controllers and the laser pointer, drawn into each eye (no depth test, so always visible)
+=================
+*/
+static void VR_DrawHands( void )
+{
+	float proj[16], view[16];
+	int saved_tmu, unit, h;
+
+	if( !vr_draw_hands.value || ( !vr.hand[0].valid && !vr.hand[1].valid ))
+		return;
+
+	Matrix4x4_ToArrayFloatGL( RI.projectionMatrix, proj );
+	Matrix4x4_ToArrayFloatGL( RI.worldviewMatrix, view );
+
+	saved_tmu = glState.activeTMU;
+	pglPushAttrib( GL_ALL_ATTRIB_BITS );
+
+	for( unit = GL_MaxTextureUnits() - 1; unit >= 0; unit-- )
+	{
+		GL_SelectTexture( unit );
+		pglDisable( GL_TEXTURE_2D );
+	}
+
+	pglDisable( GL_BLEND );
+	pglDisable( GL_ALPHA_TEST );
+	pglDisable( GL_CULL_FACE );
+	pglDisable( GL_SCISSOR_TEST );
+	pglDisable( GL_DEPTH_TEST );
+	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+
+	pglMatrixMode( GL_PROJECTION );
+	pglPushMatrix();
+	pglLoadMatrixf( proj );
+	pglMatrixMode( GL_MODELVIEW );
+	pglPushMatrix();
+	pglLoadMatrixf( view );
+
+	pglLineWidth( 3.0f );
+	pglBegin( GL_LINES );
+
+	for( h = 0; h < 2; h++ )
+	{
+			vec3_t a, b;
+
+			if( !vr.hand[h].valid )
+			continue;
+
+		// small axes: blue = pointing direction, red = sideways, green = up
+		pglColor3f( 0.3f, 0.5f, 1.0f );
+		pglVertex3f( vr.hand[h].pos[0], vr.hand[h].pos[1], vr.hand[h].pos[2] );
+		VectorScale( vr.hand[h].fwd, 4.0f, a );
+		VectorAdd( vr.hand[h].pos, a, b );
+		pglVertex3f( b[0], b[1], b[2] );
+
+		pglColor3f( 1.0f, 0.3f, 0.3f );
+		VectorScale( vr.hand[h].left, 2.5f, a );
+		VectorAdd( vr.hand[h].pos, a, b );
+		pglVertex3f( b[0], b[1], b[2] );
+		VectorSubtract( vr.hand[h].pos, a, b );
+		pglVertex3f( b[0], b[1], b[2] );
+
+		pglColor3f( 0.3f, 1.0f, 0.3f );
+		pglVertex3f( vr.hand[h].pos[0], vr.hand[h].pos[1], vr.hand[h].pos[2] );
+		VectorScale( vr.hand[h].up, 2.5f, a );
+		VectorAdd( vr.hand[h].pos, a, b );
+		pglVertex3f( b[0], b[1], b[2] );
+
+		if( h == 1 )
+		{
+			// laser from the right hand: bright when it is on the UI, dim otherwise
+			float len = vr.ui_hit ? vr.ui_dist * vr_worldscale.value : 40.0f;
+
+			if( vr.ui_hit ) pglColor3f( 0.2f, 1.0f, 1.0f );
+			else pglColor3f( 0.35f, 0.35f, 0.45f );
+
+			VectorScale( vr.hand[h].fwd, 5.0f, a );
+			VectorAdd( vr.hand[h].pos, a, b );
+			pglVertex3f( b[0], b[1], b[2] );
+			VectorScale( vr.hand[h].fwd, len, a );
+			VectorAdd( vr.hand[h].pos, a, b );
+			pglVertex3f( b[0], b[1], b[2] );
+		}
+	}
+
+	pglEnd();
+
+	pglMatrixMode( GL_MODELVIEW );
+	pglPopMatrix();
+	pglMatrixMode( GL_PROJECTION );
+	pglPopMatrix();
+	pglMatrixMode( GL_MODELVIEW );
+
+	pglPopAttrib();
+	GL_SelectTexture( saved_tmu );
+}
+
 void VR_EndEyePass( int eye )
 {
 	int w, h;
@@ -829,6 +1103,7 @@ void VR_EndEyePass( int eye )
 		pglGetIntegerv( GL_VIEWPORT, vr.dbg_viewport[eye & 1] );
 
 	VR_DrawTestScene();
+	VR_DrawHands();
 
 	if( vr.use_fbo )
 		return;	// already rendered into the eye's own buffer
@@ -850,6 +1125,9 @@ void VR_FinishFrame( void )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
 
 	pglFlush();
+
+	if( vr_finish.value )
+		pglFinish();
 
 	for( eye = 0; eye < 2; eye++ )
 	{
@@ -873,9 +1151,6 @@ void VR_FinishFrame( void )
 	}
 
 	pglFlush();
-
-	if( vr_finish.value )
-		pglFinish();
 
 	vr.frame_done = true;
 

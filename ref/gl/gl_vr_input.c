@@ -38,6 +38,13 @@ enum
 	VRB_RTRIGGER = 0, VRB_LTRIGGER, VRB_RGRIP, VRB_LGRIP, VRB_A, VRB_B, VRB_X, VRB_Y, VRB_LSTICK, VRB_RSTICK
 };
 
+static uint32_t vr_devices[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu };	// left, right
+
+uint32_t VR_InputGetDevice( int hand )
+{
+	return vr_devices[hand & 1];
+}
+
 static CVAR_DEFINE_AUTO( vr_input_debug, "0", 0, "print raw controller button masks when they change" );
 
 void VR_InputInitCvars( void )
@@ -79,6 +86,9 @@ void VR_InputPoll( float head_yaw_relative, float head_pitch, qboolean physical_
 
 	li = sys->GetTrackedDeviceIndexForControllerRole( (ETrackedControllerRole)VR_ROLE_LEFT );
 	ri = sys->GetTrackedDeviceIndexForControllerRole( (ETrackedControllerRole)VR_ROLE_RIGHT );
+
+	vr_devices[0] = li;
+	vr_devices[1] = ri;
 
 	if( li != VR_DEVICE_INVALID )
 		haveLeft = sys->GetControllerState( li, &left, sizeof( left ));

@@ -1,6 +1,6 @@
 /*
 in_vr.c - VR controller input
-Cry of Fear VR project, milestone 2.
+Cry of Fear VR project.
 Copyright (C) 2026 contributors
 
 This program is free software: you can redistribute it and/or modify
@@ -8,13 +8,16 @@ it under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
-The renderer DLL (ref/gl/gl_vr_input.c) polls the SteamVR controllers and publishes the
-result into the vr_in_* cvars. This file turns them into movement, turning, aiming and key presses.
+The renderer DLL (ref/gl/gl_vr_input.c, gl_vr.c, gl_vr_ui.c) tracks the headset and controllers and
+publishes the result into the vr_in_* cvars. This file turns them into movement, turning, aiming,
+key presses and the mouse cursor for menus.
 */
 #include "common.h"
 #include "client.h"
+#include "ref_common.h"
 #include "input.h"
 #include "keydefs.h"
+#include "platform/platform.h"
 
 // published by the renderer each frame, not meant to be set by hand
 static CVAR_DEFINE_AUTO( vr_in_active, "0", 0, "(internal) VR controllers are active" );
@@ -24,6 +27,12 @@ static CVAR_DEFINE_AUTO( vr_in_turn, "0", 0, "(internal) right stick sideways, -
 static CVAR_DEFINE_AUTO( vr_in_stick_y, "0", 0, "(internal) right stick up/down, -1..1" );
 static CVAR_DEFINE_AUTO( vr_in_head_yaw, "0", 0, "(internal) head yaw relative to the body, degrees" );
 static CVAR_DEFINE_AUTO( vr_in_head_pitch, "0", 0, "(internal) head pitch, degrees (positive = down)" );
+static CVAR_DEFINE_AUTO( vr_in_hand_valid, "0", 0, "(internal) right hand is tracked" );
+static CVAR_DEFINE_AUTO( vr_in_hand_yaw, "0", 0, "(internal) aim yaw toward the right hand's target, relative to the body" );
+static CVAR_DEFINE_AUTO( vr_in_hand_pitch, "0", 0, "(internal) aim pitch toward the right hand's target" );
+static CVAR_DEFINE_AUTO( vr_in_ui_hit, "0", 0, "(internal) the right hand points at the UI panel" );
+static CVAR_DEFINE_AUTO( vr_in_ui_x, "0", 0, "(internal) where on the UI panel, 0..1 from the left" );
+static CVAR_DEFINE_AUTO( vr_in_ui_y, "0", 0, "(internal) where on the UI panel, 0..1 from the top" );
 static CVAR_DEFINE_AUTO( vr_in_crouch, "0", 0, "(internal) physically crouching" );
 static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
 
@@ -31,8 +40,9 @@ static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
 static CVAR_DEFINE_AUTO( vr_turn_mode, "0", FCVAR_ARCHIVE, "0 = snap turn, 1 = smooth turn" );
 static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in degrees" );
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
-static CVAR_DEFINE_AUTO( vr_move_digital, "1", FCVAR_ARCHIVE, "1 = the left stick presses your forward/back/left/right keys (works with ladders and the boat), 0 = analog speed" );
-static CVAR_DEFINE_AUTO( vr_aim_gaze, "1", FCVAR_ARCHIVE, "1 = the game's aim, use and walking direction follow your head. Temporary until hand aiming exists" );
+static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = where the mouse points (the body), 1 = your head, 2 = your right hand" );
+static CVAR_DEFINE_AUTO( vr_move_digital, "1", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
+static CVAR_DEFINE_AUTO( vr_debug_move, "0", 0, "print the player's movement type when it changes (helps find where analog movement fails)" );
 
 // which key each controller button presses. single character, or mouse1/2/3, space, ctrl, shift, enter, tab, escape. empty = nothing
 static CVAR_DEFINE_AUTO( vr_key_rtrigger, "mouse1", FCVAR_ARCHIVE, "key for right trigger" );
@@ -50,7 +60,7 @@ static CVAR_DEFINE_AUTO( vr_key_back, "s", FCVAR_ARCHIVE, "key pressed when the 
 static CVAR_DEFINE_AUTO( vr_key_left, "a", FCVAR_ARCHIVE, "key pressed when the left stick goes left" );
 static CVAR_DEFINE_AUTO( vr_key_right, "d", FCVAR_ARCHIVE, "key pressed when the left stick goes right" );
 static CVAR_DEFINE_AUTO( vr_key_jump, "space", FCVAR_ARCHIVE, "key for jump (right stick up)" );
-static CVAR_DEFINE_AUTO( vr_key_crouch, "ctrl", FCVAR_ARCHIVE, "key for crouch (right stick down toggles, or physically crouch)" );
+static CVAR_DEFINE_AUTO( vr_key_crouch, "ctrl", FCVAR_ARCHIVE, "key for crouch (right stick down toggles)" );
 
 enum
 {
@@ -76,6 +86,7 @@ static qboolean vr_up_latched, vr_down_latched;
 static qboolean vr_crouch_toggled;
 static int vr_jump_frames;
 static qboolean vr_dir_down[4];	// forward, back, left, right (with hysteresis)
+static int vr_last_movetype = -1;
 
 static int IN_VRKeyFromName( const char *name )
 {
@@ -116,13 +127,20 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_stick_y );
 	Cvar_RegisterVariable( &vr_in_head_yaw );
 	Cvar_RegisterVariable( &vr_in_head_pitch );
+	Cvar_RegisterVariable( &vr_in_hand_valid );
+	Cvar_RegisterVariable( &vr_in_hand_yaw );
+	Cvar_RegisterVariable( &vr_in_hand_pitch );
+	Cvar_RegisterVariable( &vr_in_ui_hit );
+	Cvar_RegisterVariable( &vr_in_ui_x );
+	Cvar_RegisterVariable( &vr_in_ui_y );
 	Cvar_RegisterVariable( &vr_in_crouch );
 	Cvar_RegisterVariable( &vr_in_buttons );
 	Cvar_RegisterVariable( &vr_turn_mode );
 	Cvar_RegisterVariable( &vr_snap_angle );
 	Cvar_RegisterVariable( &vr_smooth_speed );
-	Cvar_RegisterVariable( &vr_aim_gaze );
+	Cvar_RegisterVariable( &vr_aim_mode );
 	Cvar_RegisterVariable( &vr_move_digital );
+	Cvar_RegisterVariable( &vr_debug_move );
 
 	for( i = 0; i < VRB_COUNT; i++ )
 		Cvar_RegisterVariable( vr_key_cvars[i] );
@@ -181,24 +199,6 @@ static void IN_VRUpdateButtons( int buttons )
 	vr_prev_buttons = buttons;
 }
 
-// the stick direction (already in the direction the game walks) -> forward/side, -1..1
-static void IN_VRWalkVector( float *fwd, float *side )
-{
-	*fwd = vr_in_move_fwd.value;
-	*side = vr_in_move_side.value;
-
-	// without gaze aim the game walks along the body, so rotate the stick by where the head points
-	if( !vr_aim_gaze.value )
-	{
-		float a = DEG2RAD( vr_in_head_yaw.value );
-		float c = cos( a ), s = sin( a );
-		float f2 = *fwd * c + *side * s;
-
-		*side = -*fwd * s + *side * c;
-		*fwd = f2;
-	}
-}
-
 static qboolean IN_VRHysteresis( qboolean was_down, float value )
 {
 	if( value > 0.55f ) return true;
@@ -206,12 +206,32 @@ static qboolean IN_VRHysteresis( qboolean was_down, float value )
 	return was_down;
 }
 
+// laser pointer: when the right hand points at the floating UI panel and a menu wants the cursor, move it there
+static void IN_VRMoveCursor( void )
+{
+	int x, y;
+
+	if( vr_in_ui_hit.value < 0.5f )
+		return;
+
+	if( cls.key_dest != key_menu && !host.mouse_visible )
+		return;
+
+	x = (int)( vr_in_ui_x.value * refState.width );
+	y = (int)( vr_in_ui_y.value * refState.height );
+	x = bound( 0, x, refState.width - 1 );
+	y = bound( 0, y, refState.height - 1 );
+
+	Platform_SetMousePos( x, y );
+}
+
 void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 {
 	float yaw = 0.0f;
 	float x, y, fwd, side;
-	int buttons;
-	qboolean in_game;
+	float head_rel, aim_rel, aim_pitch, rot;
+	int buttons, mode;
+	qboolean in_game, on_ladder, digital;
 
 	if( vr_in_active.value <= 0.0f )
 	{
@@ -219,8 +239,54 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		return;
 	}
 
+	IN_VRMoveCursor();
+
 	in_game = active && cls.key_dest == key_game && !cl.paused && !cl.intermission;
 	buttons = (int)vr_in_buttons.value;
+
+	// where does the game aim? 0 = body (mouse), 1 = head, 2 = right hand
+	head_rel = vr_in_head_yaw.value;
+	mode = (int)vr_aim_mode.value;
+
+	if( mode >= 2 && vr_in_hand_valid.value > 0.5f )
+	{
+		mode = 2;
+		aim_rel = vr_in_hand_yaw.value;
+		aim_pitch = vr_in_hand_pitch.value;
+	}
+	else if( mode >= 1 )
+	{
+		mode = 1;
+		aim_rel = head_rel;
+		aim_pitch = vr_in_head_pitch.value;
+	}
+	else
+	{
+		mode = 0;
+		aim_rel = 0.0f;
+		aim_pitch = 0.0f;
+	}
+
+	// the stick means "walk where I look". the game walks along its aim, so rotate the stick by the difference
+	rot = head_rel - aim_rel;
+	{
+		float a = DEG2RAD( rot );
+		float c = cos( a ), s = sin( a );
+
+		fwd = vr_in_move_fwd.value * c + vr_in_move_side.value * s;
+		side = -vr_in_move_fwd.value * s + vr_in_move_side.value * c;
+	}
+
+	// ladders only react to real key presses, so use the keys there
+	on_ladder = clgame.pmove && clgame.pmove->movetype == MOVETYPE_FLY;
+
+	if( vr_debug_move.value && clgame.pmove && clgame.pmove->movetype != vr_last_movetype )
+	{
+		vr_last_movetype = clgame.pmove->movetype;
+		Con_Printf( "VR: movetype is now %d\n", vr_last_movetype );
+	}
+
+	digital = vr_move_digital.value && ( on_ladder || fabs( rot ) < 15.0f );
 
 	// right stick flicks: up = jump (a short key press), down = toggle crouch
 	y = vr_in_stick_y.value;
@@ -254,11 +320,8 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	if( vr_crouch_toggled || vr_in_crouch.value > 0.0f )
 		buttons |= BIT( VRB_CROUCH );
 
-	IN_VRWalkVector( &fwd, &side );
-
-	// digital walking: press the player's own movement keys, so everything the keyboard can do
-	// (ladders, the boat, Cry of Fear's own key handling) works with the stick too
-	if( vr_move_digital.value && in_game )
+	// digital walking: press the player's own movement keys, so everything the keyboard can do works
+	if( digital && in_game )
 	{
 		vr_dir_down[0] = IN_VRHysteresis( vr_dir_down[0], fwd );
 		vr_dir_down[1] = IN_VRHysteresis( vr_dir_down[1], -fwd );
@@ -304,8 +367,8 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		VectorCopy( cmd->viewangles, cl.viewangles );
 	}
 
-	// analog walking (only when digital walking is off; the keys already move the player otherwise)
-	if( !vr_move_digital.value )
+	// analog walking, when the keys are not doing it
+	if( !digital )
 	{
 		cmd->forwardmove += fwd * Cvar_VariableValue( "cl_forwardspeed" );
 		cmd->sidemove += side * Cvar_VariableValue( "cl_sidespeed" );
@@ -316,11 +379,11 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		if( side < -0.3f ) SetBits( cmd->buttons, IN_MOVELEFT );
 	}
 
-	// gaze aim: what the game aims, uses and walks along is where the head looks.
-	// cl.viewangles stays the body direction, so the headset view does not feed back into itself.
-	if( vr_aim_gaze.value )
+	// what the game aims, uses and shoots along. cl.viewangles stays the body direction, so the
+	// headset view does not feed back into itself.
+	if( mode > 0 )
 	{
-		cmd->viewangles[YAW] = cl.viewangles[YAW] + vr_in_head_yaw.value;
-		cmd->viewangles[PITCH] = bound( -89.0f, vr_in_head_pitch.value, 89.0f );
+		cmd->viewangles[YAW] = cl.viewangles[YAW] + aim_rel;
+		cmd->viewangles[PITCH] = bound( -89.0f, aim_pitch, 89.0f );
 	}
 }

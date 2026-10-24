@@ -12,6 +12,7 @@ the Free Software Foundation, either version 3 of the License, or
 #define GL_VR_H
 
 #include "gl_local.h"
+#include <stdint.h>
 
 void VR_InitCvars( void );
 void VR_NewFrame( void );
@@ -32,6 +33,7 @@ GLuint GL_VREyeTexture( int eye );
 void *VR_GetSystemTable( void );
 void VR_InputInitCvars( void );
 void VR_InputPoll( float head_yaw_relative, float head_pitch, qboolean physical_crouch );
+uint32_t VR_InputGetDevice( int hand );	// 0 = left, 1 = right, 0xFFFFFFFF = none
 
 // helpers for the UI panel (gl_vr_ui.c)
 qboolean VR_IsActive( void );
@@ -39,5 +41,7 @@ void *VR_GetInterface( const char *fntable_name );
 void VR_GetHeadMatrix( float m[3][4] );
 void VR_UIUpdate( void );
 void VR_UIInitCvars( void );
+qboolean VR_UIRayHit( const float origin[3], const float dir[3], float *u, float *v, float *dist );
+qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles );
 
 #endif // GL_VR_H
