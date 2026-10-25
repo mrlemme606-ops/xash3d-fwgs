@@ -37,6 +37,13 @@ Interface versions: IVRSystem_019, IVRCompositor_022 (both still served by curre
 #define VR_FN
 #endif
 
+#ifndef GL_RENDERBUFFER
+#define GL_RENDERBUFFER		0x8D41
+#endif
+#ifndef GL_DEPTH24_STENCIL8
+#define GL_DEPTH24_STENCIL8		0x88F0
+#endif
+
 #ifndef GL_VIEWPORT
 #define GL_VIEWPORT		0x0BA2
 #endif
@@ -119,7 +126,7 @@ static CVAR_DEFINE_AUTO( vr_use_fbo, "0", 0, "1 = render each eye into its own b
 static CVAR_DEFINE_AUTO( vr_render_scale, "1.0", 0, "eye image size relative to what SteamVR recommends (needs a new map load or vid_restart to change)" );
 static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting the eye images (matches Valve's sample)" );
 static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
-static CVAR_DEFINE_AUTO( vr_testscene, "0", 0, "diagnostic: 1 = draw a world-fixed wireframe room over the game, 2 = draw only the room on a dark background" );
+static CVAR_DEFINE_AUTO( vr_testscene, "0", 0, "diagnostic: 1 = a world-fixed wireframe room over the game, 2 = only that room, 3 = a pure SteamVR-only test room that bypasses the game completely" );
 static CVAR_DEFINE_AUTO( vr_hand_pitch, "0", 0, "tilt the controller's pointing direction: positive = down, negative = up (degrees). Adjust until the laser points where your hand naturally points" );
 static CVAR_DEFINE_AUTO( vr_draw_hands, "1", 0, "draw placeholder controllers and the laser pointer" );
 static CVAR_DEFINE_AUTO( vr_hand_weapon, "1", 0, "draw the weapon at your right hand instead of in front of your face" );
@@ -127,6 +134,9 @@ static CVAR_DEFINE_AUTO( vr_vm_grip_x, "6", 0, "where the right hand holds the w
 static CVAR_DEFINE_AUTO( vr_vm_grip_y, "-6", 0, "where the right hand holds the weapon model: left (negative = right)" );
 static CVAR_DEFINE_AUTO( vr_vm_grip_z, "0", 0, "where the right hand holds the weapon model: up" );
 static CVAR_DEFINE_AUTO( vr_vm_flip_roll, "0", 0, "set to 1 if the weapon is rolled the wrong way" );
+static CVAR_DEFINE_AUTO( vr_vm_pitch, "0", 0, "extra rotation of the weapon model: pitch degrees" );
+static CVAR_DEFINE_AUTO( vr_vm_yaw, "0", 0, "extra rotation of the weapon model: yaw degrees" );
+static CVAR_DEFINE_AUTO( vr_vm_roll, "0", 0, "extra rotation of the weapon model: roll degrees" );
 static CVAR_DEFINE_AUTO( vr_aim_converge, "96", 0, "distance in units where the game's aim meets your hand's pointing direction" );
 static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
 
@@ -172,6 +182,9 @@ static struct
 
 	qboolean	use_fbo;	// eyes are rendered into their own buffers (otherwise: copied out of the window)
 	qboolean	fbo_failed;
+	qboolean	have_buffers;
+	GLuint		eye_fbo[2], eye_tex[2], eye_depth[2];
+	int		vm_asked, vm_applied;
 	int		eye_w, eye_h;
 	int		cur_eye;
 
@@ -247,6 +260,9 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_grip_z );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_flip_roll );
 	gEngfuncs.Cvar_RegisterVariable( &vr_aim_converge );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_pitch );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_yaw );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_roll );
 	gEngfuncs.Cvar_RegisterVariable( &vr_testscene );
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_height );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
@@ -504,8 +520,12 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 	vec3_t shift;
 	float xy, pitch, yaw, roll;
 
+	vr.vm_asked++;
+
 	if( !vr.in_eye_pass || !vr_hand_weapon.value || !vr.hand[1].valid )
 		return false;
+
+	vr.vm_applied++;
 
 	VectorScale( vr.hand[1].fwd, vr_vm_grip_x.value, shift );
 	origin[0] = vr.hand[1].pos[0] - shift[0];
@@ -526,9 +546,9 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 		roll = -roll;
 
 	// the game stores the viewmodel's pitch negated, the studio renderer undoes that
-	angles[PITCH] = -pitch;
-	angles[YAW] = yaw;
-	angles[ROLL] = roll;
+	angles[PITCH] = -( pitch + vr_vm_pitch.value );
+	angles[YAW] = yaw + vr_vm_yaw.value;
+	angles[ROLL] = roll + vr_vm_roll.value;
 	return true;
 }
 
@@ -646,18 +666,81 @@ qboolean VR_GetEyeTarget( GLuint *fbo, int *width, int *height )
 	if( !vr.in_eye_pass || !vr.use_fbo )
 		return false;
 
-	if( fbo ) *fbo = GL_VREyeFBO( vr.cur_eye );
+	if( fbo ) *fbo = vr.eye_fbo[vr.cur_eye & 1];
 	if( width ) *width = vr.eye_w;
 	if( height ) *height = vr.eye_h;
+	return true;
+}
+
+static void VR_FreeEyeBuffers( void )
+{
+	if( !vr.eye_fbo[0] )
+		return;
+
+	pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+	pglDeleteFramebuffers( 2, vr.eye_fbo );
+	pglDeleteRenderbuffers( 2, vr.eye_depth );
+	pglDeleteTextures( 2, vr.eye_tex );
+	memset( vr.eye_fbo, 0, sizeof( vr.eye_fbo ));
+	memset( vr.eye_depth, 0, sizeof( vr.eye_depth ));
+	memset( vr.eye_tex, 0, sizeof( vr.eye_tex ));
+	vr.have_buffers = false;
+}
+
+// one color texture plus one depth/stencil buffer per eye, made with plain GL (no engine helpers)
+static qboolean VR_CreateEyeBuffers( int w, int h )
+{
+	int i;
+
+	VR_FreeEyeBuffers();
+
+	pglGenTextures( 2, vr.eye_tex );
+	pglGenRenderbuffers( 2, vr.eye_depth );
+	pglGenFramebuffers( 2, vr.eye_fbo );
+
+	for( i = 0; i < 2; i++ )
+	{
+		GLenum status;
+
+		pglBindTexture( GL_TEXTURE_2D, vr.eye_tex[i] );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+		pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
+
+		pglBindRenderbuffer( GL_RENDERBUFFER, vr.eye_depth[i] );
+		pglRenderbufferStorage( GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h );
+
+		pglBindFramebuffer( GL_FRAMEBUFFER, vr.eye_fbo[i] );
+		pglFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, vr.eye_tex[i], 0 );
+		pglFramebufferRenderbuffer( GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, vr.eye_depth[i] );
+
+		status = pglCheckFramebufferStatus( GL_FRAMEBUFFER );
+
+		if( status != GL_FRAMEBUFFER_COMPLETE )
+		{
+			gEngfuncs.Con_Printf( S_ERROR "VR: eye buffer %d is incomplete (status 0x%x)\n", i, (unsigned int)status );
+			pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+			VR_FreeEyeBuffers();
+			return false;
+		}
+	}
+
+	pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+	pglBindRenderbuffer( GL_RENDERBUFFER, 0 );
+	glState.currentTextures[glState.activeTMU] = -1;
+	glState.currentTexturesIndex[glState.activeTMU] = -1;
 	return true;
 }
 
 static void VR_EnsureEyeTargets( void )
 {
 	uint32_t rw = 0, rh = 0;
-	int w, h, i;
+	int w, h;
+	qboolean need = vr_use_fbo.value || vr_testscene.value >= 3.0f;
 
-	if( !vr_use_fbo.value )
+	if( !need )
 	{
 		vr.use_fbo = false;
 		return;
@@ -675,36 +758,25 @@ static void VR_EnsureEyeTargets( void )
 	w = bound( 256, w, 8192 ) & ~1;
 	h = bound( 256, h, 8192 ) & ~1;
 
-	if( vr.use_fbo && vr.eye_w == w && vr.eye_h == h )
-		return;
-
-	pglFinish();
-
-	if( !GL_VRCreateEyeTargets( w, h ))
+	if( !vr.have_buffers || vr.eye_w != w || vr.eye_h != h )
 	{
-		gEngfuncs.Con_Printf( S_ERROR "VR: can't create %dx%d eye buffers, using the window instead (lower quality)\n", w, h );
-		vr.fbo_failed = true;
-		vr.use_fbo = false;
-		return;
+		pglFinish();
+
+		if( !VR_CreateEyeBuffers( w, h ))
+		{
+			gEngfuncs.Con_Printf( S_ERROR "VR: can't create %dx%d eye buffers, using the window instead (lower quality)\n", w, h );
+			vr.fbo_failed = true;
+			vr.use_fbo = false;
+			return;
+		}
+
+		vr.eye_w = w;
+		vr.eye_h = h;
+		vr.have_buffers = true;
+		gEngfuncs.Con_Printf( "VR: eye buffers are %dx%d\n", w, h );
 	}
 
-	// the compositor samples these textures as they are, so they need sane filtering
-	for( i = 0; i < 2; i++ )
-	{
-		pglBindTexture( GL_TEXTURE_2D, GL_VREyeTexture( i ));
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-	}
-
-	glState.currentTextures[glState.activeTMU] = -1;
-	glState.currentTexturesIndex[glState.activeTMU] = -1;
-
-	vr.eye_w = w;
-	vr.eye_h = h;
-	vr.use_fbo = true;
-	gEngfuncs.Con_Printf( "VR: rendering each eye at %dx%d\n", w, h );
+	vr.use_fbo = vr_use_fbo.value != 0.0f;
 }
 
 void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
@@ -792,7 +864,7 @@ void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 		GLboolean scissor = pglIsEnabled( GL_SCISSOR_TEST );
 
 		pglGetFloatv( GL_COLOR_CLEAR_VALUE, clear );
-		pglBindFramebuffer( GL_FRAMEBUFFER, GL_VREyeFBO( eye ));
+		pglBindFramebuffer( GL_FRAMEBUFFER, vr.eye_fbo[eye & 1] );
 
 		if( scissor )
 			pglDisable( GL_SCISSOR_TEST );
@@ -867,7 +939,7 @@ static void VR_DrawTestScene( void )
 	vec3_t o;
 	int saved_tmu, unit;
 
-	if( !vr_testscene.value )
+	if( !vr_testscene.value || vr_testscene.value >= 3.0f )
 	{
 		vr.test_anchored = false;
 		return;
@@ -1117,9 +1189,166 @@ void VR_EndEyePass( int eye )
 	VR_ForgetTextureBinding();
 }
 
+/*
+=================
+Diagnostic (vr_testscene 3): a room drawn with nothing but SteamVR's own poses and field of view,
+exactly the way Valve's sample does it. It bypasses the game, its camera, its projection and its
+rig mapping. If THIS warps too, the problem is not in the engine at all.
+Everything is in meters in SteamVR's standing space (floor at y = 0).
+=================
+*/
+static void VR_RenderPureTest( int eye )
+{
+	const HmdMatrix34_t *m = &vr.poses[VR_HMD_INDEX].mDeviceToAbsoluteTracking;
+	float Re[3][3], pe[3], proj[16], view[16];
+	float l = vr.tan_frustum[eye][0], r = vr.tan_frustum[eye][1];
+	float u = vr.tan_frustum[eye][2], dn = vr.tan_frustum[eye][3];
+	const float n = 0.05f, f = 100.0f;
+	int a, b, c, i, unit, saved_tmu;
+	float x;
+
+	for( a = 0; a < 3; a++ )
+		for( b = 0; b < 3; b++ )
+		{
+			Re[a][b] = 0.0f;
+
+			for( c = 0; c < 3; c++ )
+				Re[a][b] += m->m[a][c] * vr.eye_rot[eye][c][b];
+		}
+
+	for( i = 0; i < 3; i++ )
+		pe[i] = m->m[i][3] + m->m[i][0] * vr.eye_offset[eye][0] + m->m[i][1] * vr.eye_offset[eye][1] + m->m[i][2] * vr.eye_offset[eye][2];
+
+	memset( proj, 0, sizeof( proj ));
+	proj[0] = 2.0f / ( r - l );
+	proj[5] = 2.0f / ( u - dn );
+	proj[8] = ( r + l ) / ( r - l );
+	proj[9] = ( u + dn ) / ( u - dn );
+	proj[10] = -( f + n ) / ( f - n );
+	proj[11] = -1.0f;
+	proj[14] = -2.0f * f * n / ( f - n );
+
+	// view = inverse of the eye's pose (rotation transposed, translation rotated back)
+	memset( view, 0, sizeof( view ));
+
+	for( i = 0; i < 3; i++ )
+	{
+		for( a = 0; a < 3; a++ )
+			view[a * 4 + i] = Re[a][i];
+
+		view[12 + i] = -( Re[0][i] * pe[0] + Re[1][i] * pe[1] + Re[2][i] * pe[2] );
+	}
+
+	view[15] = 1.0f;
+
+	saved_tmu = glState.activeTMU;
+	pglPushAttrib( GL_ALL_ATTRIB_BITS );
+
+	for( unit = GL_MaxTextureUnits() - 1; unit >= 0; unit-- )
+	{
+		GL_SelectTexture( unit );
+		pglDisable( GL_TEXTURE_2D );
+	}
+
+	pglBindFramebuffer( GL_FRAMEBUFFER, vr.eye_fbo[eye & 1] );
+	pglViewport( 0, 0, vr.eye_w, vr.eye_h );
+	pglDisable( GL_SCISSOR_TEST );
+	pglDisable( GL_BLEND );
+	pglDisable( GL_ALPHA_TEST );
+	pglDisable( GL_CULL_FACE );
+	pglEnable( GL_DEPTH_TEST );
+	pglDepthMask( GL_TRUE );
+	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+	pglClearColor( 0.05f, 0.05f, 0.08f, 1.0f );
+	pglClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+
+	pglMatrixMode( GL_PROJECTION );
+	pglPushMatrix();
+	pglLoadMatrixf( proj );
+	pglMatrixMode( GL_MODELVIEW );
+	pglPushMatrix();
+	pglLoadMatrixf( view );
+
+	pglLineWidth( 2.0f );
+	pglBegin( GL_LINES );
+
+	for( x = -3.0f; x <= 3.001f; x += 0.5f )
+	{
+		// floor grid
+		pglColor3f( 0.45f, 0.45f, 0.6f );
+		pglVertex3f( x, 0.0f, -3.0f ); pglVertex3f( x, 0.0f, 3.0f );
+		pglVertex3f( -3.0f, 0.0f, x ); pglVertex3f( 3.0f, 0.0f, x );
+
+		// four walls
+		pglColor3f( 0.3f, 0.7f, 0.4f );
+		pglVertex3f( x, 0.0f, -3.0f ); pglVertex3f( x, 3.0f, -3.0f );
+		pglVertex3f( x, 0.0f, 3.0f ); pglVertex3f( x, 3.0f, 3.0f );
+		pglVertex3f( -3.0f, 0.0f, x ); pglVertex3f( -3.0f, 3.0f, x );
+		pglVertex3f( 3.0f, 0.0f, x ); pglVertex3f( 3.0f, 3.0f, x );
+	}
+
+	for( x = 0.5f; x <= 3.001f; x += 0.5f )
+	{
+		pglColor3f( 0.8f, 0.8f, 0.3f );
+		pglVertex3f( -3.0f, x, -3.0f ); pglVertex3f( 3.0f, x, -3.0f );
+		pglVertex3f( 3.0f, x, -3.0f ); pglVertex3f( 3.0f, x, 3.0f );
+		pglVertex3f( 3.0f, x, 3.0f ); pglVertex3f( -3.0f, x, 3.0f );
+		pglVertex3f( -3.0f, x, 3.0f ); pglVertex3f( -3.0f, x, -3.0f );
+	}
+
+	// axes at the center of the play space: red = +x, green = up, blue = +z (toward the back)
+	pglColor3f( 1.0f, 0.2f, 0.2f ); pglVertex3f( 0.0f, 0.02f, 0.0f ); pglVertex3f( 1.0f, 0.02f, 0.0f );
+	pglColor3f( 0.2f, 1.0f, 0.2f ); pglVertex3f( 0.0f, 0.02f, 0.0f ); pglVertex3f( 0.0f, 1.0f, 0.0f );
+	pglColor3f( 0.3f, 0.4f, 1.0f ); pglVertex3f( 0.0f, 0.02f, 0.0f ); pglVertex3f( 0.0f, 0.02f, 1.0f );
+
+	// a white cube two meters in front (-z), at head height
+	pglColor3f( 1.0f, 1.0f, 1.0f );
+	{
+		const float cx = 0.0f, cy = 1.5f, cz = -2.0f, e = 0.25f;
+		int sx, sy, sz;
+
+		for( sx = -1; sx <= 1; sx += 2 )
+			for( sy = -1; sy <= 1; sy += 2 )
+			{
+				pglVertex3f( cx + sx * e, cy + sy * e, cz - e ); pglVertex3f( cx + sx * e, cy + sy * e, cz + e );
+			}
+
+		for( sy = -1; sy <= 1; sy += 2 )
+			for( sz = -1; sz <= 1; sz += 2 )
+			{
+				pglVertex3f( cx - e, cy + sy * e, cz + sz * e ); pglVertex3f( cx + e, cy + sy * e, cz + sz * e );
+			}
+
+		for( sx = -1; sx <= 1; sx += 2 )
+			for( sz = -1; sz <= 1; sz += 2 )
+			{
+				pglVertex3f( cx + sx * e, cy - e, cz + sz * e ); pglVertex3f( cx + sx * e, cy + e, cz + sz * e );
+			}
+	}
+
+	pglEnd();
+
+	pglMatrixMode( GL_MODELVIEW );
+	pglPopMatrix();
+	pglMatrixMode( GL_PROJECTION );
+	pglPopMatrix();
+	pglMatrixMode( GL_MODELVIEW );
+
+	pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
+	pglPopAttrib();
+	GL_SelectTexture( saved_tmu );
+}
+
 void VR_FinishFrame( void )
 {
 	int eye;
+	qboolean pure = vr_testscene.value >= 3.0f && vr.have_buffers;
+
+	if( pure )
+	{
+		VR_RenderPureTest( 0 );
+		VR_RenderPureTest( 1 );
+	}
 
 	if( vr.use_fbo )
 		pglBindFramebuffer( GL_FRAMEBUFFER, 0 );
@@ -1135,7 +1364,7 @@ void VR_FinishFrame( void )
 		VRTextureBounds_t bounds;
 		int err;
 
-		tex.handle = (void *)(uintptr_t)( vr.use_fbo ? GL_VREyeTexture( eye ) : vr.tex[eye] );
+		tex.handle = (void *)(uintptr_t)(( vr.use_fbo || pure ) ? vr.eye_tex[eye] : vr.tex[eye] );
 		tex.eType = VR_TEXTURE_OPENGL;
 		tex.eColorSpace = VR_COLORSPACE_GAMMA;
 
@@ -1187,5 +1416,7 @@ void VR_FinishFrame( void )
 			vr.dbg_viewport[0][0], vr.dbg_viewport[0][1], vr.dbg_viewport[0][2], vr.dbg_viewport[0][3],
 			vr.dbg_viewport[1][0], vr.dbg_viewport[1][1], vr.dbg_viewport[1][2], vr.dbg_viewport[1][3],
 			vr.head_pos[0], vr.head_pos[1], vr.head_pos[2], vr_worldscale.value, vr_fov_scale.value );
+		gEngfuncs.Con_Printf( "VR debug: weapon hook asked %d times, applied %d times (0 applied means the weapon is not drawn through the normal viewmodel path)\n", vr.vm_asked, vr.vm_applied );
+		vr.vm_asked = vr.vm_applied = 0;
 	}
 }

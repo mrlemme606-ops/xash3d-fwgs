@@ -18,6 +18,7 @@ key presses and the mouse cursor for menus.
 #include "input.h"
 #include "keydefs.h"
 #include "platform/platform.h"
+#include "vgui_draw.h"
 
 // published by the renderer each frame, not meant to be set by hand
 static CVAR_DEFINE_AUTO( vr_in_active, "0", 0, "(internal) VR controllers are active" );
@@ -40,7 +41,7 @@ static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
 static CVAR_DEFINE_AUTO( vr_turn_mode, "0", FCVAR_ARCHIVE, "0 = snap turn, 1 = smooth turn" );
 static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in degrees" );
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
-static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = where the mouse points (the body), 1 = your head, 2 = your right hand" );
+static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = body (mouse), 1 = head, 2 = right hand while you use/shoot and head otherwise (default), 3 = right hand always" );
 static CVAR_DEFINE_AUTO( vr_move_digital, "1", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
 static CVAR_DEFINE_AUTO( vr_debug_move, "0", 0, "print the player's movement type when it changes (helps find where analog movement fails)" );
 
@@ -87,6 +88,15 @@ static qboolean vr_crouch_toggled;
 static int vr_jump_frames;
 static qboolean vr_dir_down[4];	// forward, back, left, right (with hysteresis)
 static int vr_last_movetype = -1;
+static double vr_hand_aim_until;	// keep aiming with the hand until this time
+
+// mouse buttons must take the same path as a real mouse (menus and the client listen there), keys can go straight in
+static void IN_VRSendKey( int key, qboolean down )
+{
+	if( key >= K_MOUSE1 && key <= K_MOUSE3 )
+		IN_MouseEvent( key - K_MOUSE1, down );
+	else Key_Event( key, down );
+}
 
 static int IN_VRKeyFromName( const char *name )
 {
@@ -154,7 +164,7 @@ static void IN_VRReleaseAll( void )
 	{
 		if( vr_pressed_key[i] )
 		{
-			Key_Event( vr_pressed_key[i], false );
+			IN_VRSendKey( vr_pressed_key[i], false );
 			vr_pressed_key[i] = 0;
 		}
 	}
@@ -185,13 +195,13 @@ static void IN_VRUpdateButtons( int buttons )
 			if( key )
 			{
 				vr_pressed_key[i] = key;
-				Key_Event( key, true );
+				IN_VRSendKey( key, true );
 			}
 		}
 		else if( vr_pressed_key[i] )
 		{
 			// release exactly the key we pressed, even if the cvar changed meanwhile
-			Key_Event( vr_pressed_key[i], false );
+			IN_VRSendKey( vr_pressed_key[i], false );
 			vr_pressed_key[i] = 0;
 		}
 	}
@@ -222,7 +232,11 @@ static void IN_VRMoveCursor( void )
 	x = bound( 0, x, refState.width - 1 );
 	y = bound( 0, y, refState.height - 1 );
 
+	// the real cursor first (client code that reads the OS cursor), then the exact position for the UI,
+	// so a window larger than the desktop can't clamp where the laser points
 	Platform_SetMousePos( x, y );
+	VGui_MouseMove( x, y );
+	UI_MouseMove( x, y );
 }
 
 void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
@@ -244,11 +258,15 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	in_game = active && cls.key_dest == key_game && !cl.paused && !cl.intermission;
 	buttons = (int)vr_in_buttons.value;
 
-	// where does the game aim? 0 = body (mouse), 1 = head, 2 = right hand
+	// where does the game aim? 0 = body (mouse), 1 = head, 2 = hand while acting, 3 = hand always
 	head_rel = vr_in_head_yaw.value;
 	mode = (int)vr_aim_mode.value;
 
-	if( mode >= 2 && vr_in_hand_valid.value > 0.5f )
+	// using something or shooting: aim with the hand for a moment (walking keeps following the head otherwise)
+	if( buttons & ( BIT( VRB_RTRIGGER ) | BIT( VRB_LTRIGGER ) | BIT( VRB_RGRIP ) | BIT( VRB_B )))
+		vr_hand_aim_until = host.realtime + 0.35;
+
+	if( vr_in_hand_valid.value > 0.5f && ( mode >= 3 || ( mode == 2 && host.realtime < vr_hand_aim_until )))
 	{
 		mode = 2;
 		aim_rel = vr_in_hand_yaw.value;
