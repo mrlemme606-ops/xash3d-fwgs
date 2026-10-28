@@ -19,6 +19,10 @@ Design notes:
 #include "xash3d_mathlib.h"
 #include <ctype.h>
 
+#ifndef PM_STUDIO_BOX
+#define PM_STUDIO_BOX	0x00000002	// trace against boxes of studio models (from pm_defs.h)
+#endif
+
 #include <stdint.h>
 #include <stdbool.h>
 
