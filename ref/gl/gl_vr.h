@@ -44,4 +44,7 @@ void VR_UIInitCvars( void );
 qboolean VR_UIRayHit( const float origin[3], const float dir[3], float *u, float *v, float *dist );
 qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles );
 
+float VR_GetViewModelScale( void );
+qboolean VR_HideViewModelMesh( int mesh, const char *texname );
+
 #endif // GL_VR_H

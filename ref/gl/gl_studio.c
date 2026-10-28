@@ -138,6 +138,7 @@ static studiohdr_t *m_pStudioHeader;
 static float m_flGaitMovement;
 static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
+static qboolean r_vr_viewmodel;	// the weapon is being drawn at the VR hand
 
 /*
 ====================
@@ -543,7 +544,14 @@ static void R_StudioSetUpTransform( cl_entity_t *e )
 	// don't rotate clients, only aim
 	if( e->player ) angles[PITCH] = 0.0f;
 
-	Matrix3x4_CreateFromEntity( g_studio.rotationmatrix, angles, origin, 1.0f );
+	{
+		float scale = 1.0f;
+
+		if( r_vr_viewmodel && e == tr.viewent )
+			scale = VR_GetViewModelScale();
+
+		Matrix3x4_CreateFromEntity( g_studio.rotationmatrix, angles, origin, scale );
+	}
 
 	if( tr.fFlipViewModel )
 	{
@@ -2088,6 +2096,10 @@ static void R_StudioDrawPoints( void )
 		float s = 1.0f / (float)ptexture[pskinref[pmesh->skinref]].width;
 		float t = 1.0f / (float)ptexture[pskinref[pmesh->skinref]].height;
 
+		if( r_vr_viewmodel && RI.currententity == tr.viewent
+			&& VR_HideViewModelMesh( j, ptexture[pskinref[pmesh->skinref]].name ))
+			continue;
+
 		if( FBitSet( g_nFaceFlags, STUDIO_NF_MASKED ))
 		{
 			pglEnable( GL_ALPHA_TEST );
@@ -3212,7 +3224,7 @@ static void R_StudioDrawModelInternal( cl_entity_t *e, int flags )
 			R_StudioDrawPlayer( flags, &e->curstate );
 		else R_StudioDrawModel( flags );
 	}
-	else if( unlikely( r_studio_builtin_renderer.value ))
+	else if( unlikely( r_studio_builtin_renderer.value ) || r_vr_viewmodel )
 	{
 		if( e->player )
 			R_StudioDrawPlayer( flags, R_StudioGetPlayerState( e->index - 1 ));
@@ -3358,6 +3370,7 @@ void R_DrawViewModel( void )
 	}
 
 	// adjust the depth range to prevent view model from poking into walls
+	r_vr_viewmodel = vr_hand;
 	pglDepthRange( gldepthmin, gldepthmin + VIEWMODEL_DEPTH_RANGE * ( gldepthmax - gldepthmin ));
 	RI.currentmodel = RI.currententity->model;
 
@@ -3371,6 +3384,8 @@ void R_DrawViewModel( void )
 		R_StudioDrawModelInternal( RI.currententity, STUDIO_RENDER );
 		break;
 	}
+
+	r_vr_viewmodel = false;
 
 	// restore depth range
 	pglDepthRange( gldepthmin, gldepthmax );

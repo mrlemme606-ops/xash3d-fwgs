@@ -17,6 +17,7 @@ Design notes:
 */
 #include "gl_vr.h"
 #include "xash3d_mathlib.h"
+#include <ctype.h>
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -137,7 +138,12 @@ static CVAR_DEFINE_AUTO( vr_vm_flip_roll, "0", 0, "set to 1 if the weapon is rol
 static CVAR_DEFINE_AUTO( vr_vm_pitch, "0", 0, "extra rotation of the weapon model: pitch degrees" );
 static CVAR_DEFINE_AUTO( vr_vm_yaw, "0", 0, "extra rotation of the weapon model: yaw degrees" );
 static CVAR_DEFINE_AUTO( vr_vm_roll, "0", 0, "extra rotation of the weapon model: roll degrees" );
+static CVAR_DEFINE_AUTO( vr_aim_trace, "1", 0, "1 = shots go to the exact point your hand ray hits, 0 = fixed distance (vr_aim_converge)" );
 static CVAR_DEFINE_AUTO( vr_aim_converge, "96", 0, "distance in units where the game's aim meets your hand's pointing direction" );
+static CVAR_DEFINE_AUTO( vr_vm_scale, "1.0", 0, "size of the weapon model in your hand (1.0 = original)" );
+static CVAR_DEFINE_AUTO( vr_vm_hide_tex, "", 0, "comma separated texture name fragments to hide on the weapon model, e.g. arm,sleeve" );
+static CVAR_DEFINE_AUTO( vr_vm_dump_tex, "0", 0, "1 = print the texture name of every weapon mesh once" );
+static qboolean vr_dump_done;
 static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
 
 static struct
@@ -260,6 +266,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_grip_z );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_flip_roll );
 	gEngfuncs.Cvar_RegisterVariable( &vr_aim_converge );
+	gEngfuncs.Cvar_RegisterVariable( &vr_aim_trace );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_yaw );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_roll );
@@ -270,6 +277,9 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_render_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_use_fbo );
 	gEngfuncs.Cvar_RegisterVariable( &vr_ipd_scale );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_scale );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_hide_tex );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_dump_tex );
 	VR_InputInitCvars();
 	VR_UIInitCvars();
 	gEngfuncs.Cmd_AddCommand( "vr_recenter", VR_Recenter_f, "recenter the VR view on the current head position and direction" );
@@ -476,8 +486,28 @@ static void VR_PublishAim( const ref_viewpass_t *game )
 	VR_RotateZ( tmp, d, tmp );
 	VectorAdd( game->vieworigin, tmp, head );
 
+	// aim at the point the hand's ray actually hits, so the shot lands where the gun points.
+	// no hit (or a hit right at the head) falls back to a fixed distance along the ray.
 	VectorScale( vr.hand[1].fwd, vr_aim_converge.value, tmp );
 	VectorAdd( vr.hand[1].pos, tmp, target );
+
+	if( vr_aim_trace.value )
+	{
+		pmtrace_t hit;
+		vec3_t end, to_hit;
+
+		VectorScale( vr.hand[1].fwd, 8192.0f, tmp );
+		VectorAdd( vr.hand[1].pos, tmp, end );
+		hit = gEngfuncs.CL_TraceLine( vr.hand[1].pos, end, PM_STUDIO_BOX );
+
+		if( !hit.startsolid && hit.fraction < 1.0f )
+		{
+			VectorSubtract( hit.endpos, head, to_hit );
+
+			if( DotProduct( to_hit, to_hit ) > 16.0f * 16.0f )
+				VectorCopy( hit.endpos, target );
+		}
+	}
 	VectorSubtract( target, head, aim );
 
 	xy = sqrt( aim[0] * aim[0] + aim[1] * aim[1] );
@@ -550,6 +580,58 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 	angles[YAW] = yaw + vr_vm_yaw.value;
 	angles[ROLL] = roll + vr_vm_roll.value;
 	return true;
+}
+
+float VR_GetViewModelScale( void )
+{
+	return bound( 0.1f, vr_vm_scale.value, 4.0f );
+}
+
+static qboolean VR_ContainsNoCase( const char *s, const char *frag )
+{
+	size_t n = strlen( frag ), i;
+
+	for( ; *s; s++ )
+	{
+		for( i = 0; i < n && s[i]; i++ )
+		{
+			if( tolower( (unsigned char)s[i] ) != tolower( (unsigned char)frag[i] ))
+				break;
+		}
+
+		if( i == n )
+			return true;
+	}
+
+	return false;
+}
+
+// called by the studio renderer for every mesh of the weapon model while it is drawn at the hand
+qboolean VR_HideViewModelMesh( int mesh, const char *texname )
+{
+	const char *p = vr_vm_hide_tex.string;
+
+	if( vr_vm_dump_tex.value )
+	{
+		gEngfuncs.Con_Printf( "VR weapon mesh %d: texture '%s'\n", mesh, texname );
+		vr_dump_done = true;
+	}
+
+	while( p && *p )
+	{
+		char frag[64];
+		int n = 0;
+
+		while( *p == ',' || *p == ' ' ) p++;
+		while( *p && *p != ',' && n < 63 ) frag[n++] = *p++;
+		while( n > 0 && frag[n - 1] == ' ' ) n--;
+		frag[n] = 0;
+
+		if( n && VR_ContainsNoCase( texname, frag ))
+			return true;
+	}
+
+	return false;
 }
 
 qboolean VR_BeginMainPass( const ref_viewpass_t *game )
@@ -1382,6 +1464,12 @@ void VR_FinishFrame( void )
 	pglFlush();
 
 	vr.frame_done = true;
+
+	if( vr_dump_done )
+	{
+		vr_dump_done = false;
+		gEngfuncs.Cvar_SetValue( "vr_vm_dump_tex", 0.0f );
+	}
 
 	// The eye images are captured. Clear the window to transparent so that everything the engine
 	// draws next (HUD, menus, subtitles) lands on its own and can be shown on the floating UI panel.
