@@ -132,20 +132,22 @@ static CVAR_DEFINE_AUTO( vr_render_scale, "1.0", 0, "eye image size relative to 
 static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting the eye images (matches Valve's sample)" );
 static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
 static CVAR_DEFINE_AUTO( vr_testscene, "0", 0, "diagnostic: 1 = a world-fixed wireframe room over the game, 2 = only that room, 3 = a pure SteamVR-only test room that bypasses the game completely" );
-static CVAR_DEFINE_AUTO( vr_hand_pitch, "0", 0, "tilt the controller's pointing direction: positive = down, negative = up (degrees). Adjust until the laser points where your hand naturally points" );
+static CVAR_DEFINE_AUTO( vr_hand_pitch, "60", 0, "tilt the controller's pointing direction: positive = down, negative = up (degrees). Adjust until the laser points where your hand naturally points" );
 static CVAR_DEFINE_AUTO( vr_draw_hands, "1", 0, "draw placeholder controllers and the laser pointer" );
 static CVAR_DEFINE_AUTO( vr_hand_weapon, "1", 0, "draw the weapon at your right hand instead of in front of your face" );
-static CVAR_DEFINE_AUTO( vr_vm_grip_x, "6", 0, "where the right hand holds the weapon model (model axes): forward" );
-static CVAR_DEFINE_AUTO( vr_vm_grip_y, "-6", 0, "where the right hand holds the weapon model: left (negative = right)" );
-static CVAR_DEFINE_AUTO( vr_vm_grip_z, "0", 0, "where the right hand holds the weapon model: up" );
+static CVAR_DEFINE_AUTO( vr_vm_grip_x, "13", 0, "where the right hand holds the weapon model (model axes): forward" );
+static CVAR_DEFINE_AUTO( vr_vm_grip_y, "-4", 0, "where the right hand holds the weapon model: left (negative = right)" );
+static CVAR_DEFINE_AUTO( vr_vm_grip_z, "-3", 0, "where the right hand holds the weapon model: up" );
 static CVAR_DEFINE_AUTO( vr_vm_flip_roll, "0", 0, "set to 1 if the weapon is rolled the wrong way" );
 static CVAR_DEFINE_AUTO( vr_vm_pitch, "0", 0, "extra rotation of the weapon model: pitch degrees" );
 static CVAR_DEFINE_AUTO( vr_vm_yaw, "0", 0, "extra rotation of the weapon model: yaw degrees" );
 static CVAR_DEFINE_AUTO( vr_vm_roll, "0", 0, "extra rotation of the weapon model: roll degrees" );
 static CVAR_DEFINE_AUTO( vr_aim_trace, "1", 0, "1 = shots go to the exact point your hand ray hits, 0 = fixed distance (vr_aim_converge)" );
 static CVAR_DEFINE_AUTO( vr_aim_converge, "96", 0, "distance in units where the game's aim meets your hand's pointing direction" );
-static CVAR_DEFINE_AUTO( vr_vm_scale, "1.0", 0, "size of the weapon model in your hand (1.0 = original)" );
-static CVAR_DEFINE_AUTO( vr_vm_hide_tex, "", 0, "comma separated texture name fragments to hide on the weapon model, e.g. arm,sleeve" );
+static CVAR_DEFINE_AUTO( vr_vm_scale, "0.5", 0, "size of the weapon model in your hand (1.0 = original)" );
+static CVAR_DEFINE_AUTO( vr_vm_hide_tex, "sleeve", 0, "texture name fragments of weapon model parts to hide completely. Separate with + (a comma does not work in the console)" );
+static CVAR_DEFINE_AUTO( vr_vm_clip_tex, "glove+hand+fingers+tex1+tex2", 0, "texture name fragments of weapon model parts (the arm) that are cut off behind the wrist. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_vm_arm_cut, "2", 0, "where the arm is cut off, in units behind your hand (bigger = more arm visible)" );
 static CVAR_DEFINE_AUTO( vr_vm_dump_tex, "0", 0, "1 = print the texture name of every weapon mesh once" );
 static qboolean vr_dump_done;
 static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
@@ -211,6 +213,8 @@ static struct
 } vr;
 
 static void VR_EnsureEyeTargets( void );
+static void VR_UpdateWeaponProfile( void );
+static void VR_WeaponSave_f( void );
 
 /*
 =================
@@ -283,9 +287,12 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_ipd_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_hide_tex );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_clip_tex );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_arm_cut );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_dump_tex );
 	VR_InputInitCvars();
 	VR_UIInitCvars();
+	gEngfuncs.Cmd_AddCommand( "vr_weapon_save", VR_WeaponSave_f, "save the current weapon position/size settings for the weapon you are holding" );
 	gEngfuncs.Cmd_AddCommand( "vr_recenter", VR_Recenter_f, "recenter the VR view on the current head position and direction" );
 }
 
@@ -472,28 +479,32 @@ static void VR_UpdateHands( const ref_viewpass_t *game )
 	}
 }
 
+static vec3_t vr_aim_target;
+static qboolean vr_aim_hit;	// the hand ray hit something, vr_aim_target is that point
+
 // the game aims, uses and shoots along angles we send it. Aim from the head toward the point your hand points at.
 static void VR_PublishAim( const ref_viewpass_t *game )
 {
-	float d = game->viewangles[YAW] - vr.ref_yaw;
 	vec3_t head, tmp, target, aim;
 	float xy, pitch, yaw;
 
 	if( !vr.hand[1].valid )
 	{
+		vr_aim_hit = false;
 		gEngfuncs.Cvar_SetValue( "vr_in_hand_valid", 0.0f );
 		return;
 	}
 
-	VR_ConvPos( vr.head_pos, tmp );
-	VectorSubtract( tmp, vr.ref_pos, tmp );
-	VR_RotateZ( tmp, d, tmp );
-	VectorAdd( game->vieworigin, tmp, head );
+	// the server fires from the player's own eye, not from where your head is in the room,
+	// so the shot angles must be worked out from there
+	VectorCopy( game->vieworigin, head );
 
 	// aim at the point the hand's ray actually hits, so the shot lands where the gun points.
 	// no hit (or a hit right at the head) falls back to a fixed distance along the ray.
 	VectorScale( vr.hand[1].fwd, vr_aim_converge.value, tmp );
 	VectorAdd( vr.hand[1].pos, tmp, target );
+
+	vr_aim_hit = false;
 
 	if( vr_aim_trace.value )
 	{
@@ -509,9 +520,13 @@ static void VR_PublishAim( const ref_viewpass_t *game )
 			VectorSubtract( hit.endpos, head, to_hit );
 
 			if( DotProduct( to_hit, to_hit ) > 16.0f * 16.0f )
+			{
 				VectorCopy( hit.endpos, target );
+				vr_aim_hit = true;
+			}
 		}
 	}
+	VectorCopy( target, vr_aim_target );
 	VectorSubtract( target, head, aim );
 
 	xy = sqrt( aim[0] * aim[0] + aim[1] * aim[1] );
@@ -555,6 +570,7 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 	float xy, pitch, yaw, roll;
 
 	vr.vm_asked++;
+	VR_UpdateWeaponProfile();
 
 	if( !vr.in_eye_pass || !vr_hand_weapon.value || !vr.hand[1].valid )
 		return false;
@@ -610,25 +626,17 @@ static qboolean VR_ContainsNoCase( const char *s, const char *frag )
 	return false;
 }
 
-// called by the studio renderer for every mesh of the weapon model while it is drawn at the hand
-qboolean VR_HideViewModelMesh( int mesh, const char *texname )
+static qboolean VR_ListMatches( const char *list, const char *texname )
 {
-	const char *p = vr_vm_hide_tex.string;
-
-	if( vr_vm_dump_tex.value )
-	{
-		gEngfuncs.Con_Printf( "VR weapon mesh %d: texture '%s'\n", mesh, texname );
-		vr_dump_done = true;
-	}
+	const char *p = list;
 
 	while( p && *p )
 	{
 		char frag[64];
 		int n = 0;
 
-		while( *p == ',' || *p == ' ' ) p++;
-		while( *p && *p != ',' && n < 63 ) frag[n++] = *p++;
-		while( n > 0 && frag[n - 1] == ' ' ) n--;
+		while( *p == '+' || *p == '|' || *p == ',' || *p == ';' || *p == ' ' ) p++;
+		while( *p && *p != '+' && *p != '|' && *p != ',' && *p != ';' && *p != ' ' && n < 63 ) frag[n++] = *p++;
 		frag[n] = 0;
 
 		if( n && VR_ContainsNoCase( texname, frag ))
@@ -636,6 +644,152 @@ qboolean VR_HideViewModelMesh( int mesh, const char *texname )
 	}
 
 	return false;
+}
+
+// called by the studio renderer for every mesh of the weapon model while it is drawn at the hand
+int VR_ViewModelMeshMode( int mesh, const char *texname )
+{
+	if( vr_vm_dump_tex.value )
+	{
+		gEngfuncs.Con_Printf( "VR weapon '%s' mesh %d: texture '%s'\n",
+			( tr.viewent && tr.viewent->model ) ? tr.viewent->model->name : "?", mesh, texname );
+		vr_dump_done = true;
+	}
+
+	if( VR_ListMatches( vr_vm_hide_tex.string, texname ))
+		return 1;
+
+	if( VR_ListMatches( vr_vm_clip_tex.string, texname ))
+		return 2;
+
+	return 0;
+}
+
+// everything in front of a plane just behind the hand is drawn, the arm behind it is cut off
+void VR_ViewModelClip( qboolean on )
+{
+	GLdouble eq[4];
+	float view[16];
+	vec3_t n, c;
+
+	if( !on || !vr.hand[1].valid )
+	{
+		pglDisable( GL_CLIP_PLANE0 );
+		return;
+	}
+
+	VectorCopy( vr.hand[1].fwd, n );
+	VectorMA( vr.hand[1].pos, -vr_vm_arm_cut.value, n, c );
+
+	eq[0] = n[0];
+	eq[1] = n[1];
+	eq[2] = n[2];
+	eq[3] = -DotProduct( n, c );
+
+	Matrix4x4_ToArrayFloatGL( RI.worldviewMatrix, view );
+	pglMatrixMode( GL_MODELVIEW );
+	pglPushMatrix();
+	pglLoadMatrixf( view );
+	pglClipPlane( GL_CLIP_PLANE0, eq );
+	pglEnable( GL_CLIP_PLANE0 );
+	pglPopMatrix();
+}
+
+/*
+=================
+Per-weapon settings. The values of the weapon cvars when the first weapon shows up are the defaults.
+When you switch weapons they are restored, then vr_weapon_<model>.cfg is run if it exists.
+"vr_weapon_save" writes that file for the weapon you are holding.
+=================
+*/
+static convar_t *vr_tune_vars[] =
+{
+	&vr_vm_grip_x, &vr_vm_grip_y, &vr_vm_grip_z, &vr_vm_pitch, &vr_vm_yaw,
+	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut
+};
+
+#define VR_TUNE_COUNT ( (int)( sizeof( vr_tune_vars ) / sizeof( vr_tune_vars[0] )))
+
+static float vr_tune_base[16];
+static qboolean vr_tune_have_base;
+static char vr_tune_model[64];
+
+static void VR_WeaponFileName( const char *modelname, char *out, size_t size )
+{
+	const char *base = modelname, *p;
+	char name[48];
+	size_t n = 0;
+
+	for( p = modelname; *p; p++ )
+	{
+		if( *p == '/' || *p == '\\' )
+			base = p + 1;
+	}
+
+	while( *base && *base != '.' && n < sizeof( name ) - 1 )
+		name[n++] = *base++;
+
+	name[n] = 0;
+	Q_snprintf( out, size, "vr_weapon_%s.cfg", name );
+}
+
+static void VR_UpdateWeaponProfile( void )
+{
+	const char *model;
+	char file[96], cmd[128];
+	int i;
+
+	if( !tr.viewent || !tr.viewent->model )
+		return;
+
+	model = tr.viewent->model->name;
+
+	if( !vr_tune_have_base )
+	{
+		for( i = 0; i < VR_TUNE_COUNT; i++ )
+			vr_tune_base[i] = vr_tune_vars[i]->value;
+
+		vr_tune_have_base = true;
+	}
+	else if( !Q_strcmp( model, vr_tune_model ))
+	{
+		return;
+	}
+	else
+	{
+		for( i = 0; i < VR_TUNE_COUNT; i++ )
+			gEngfuncs.Cvar_SetValue( vr_tune_vars[i]->name, vr_tune_base[i] );
+	}
+
+	Q_strncpy( vr_tune_model, model, sizeof( vr_tune_model ));
+	VR_WeaponFileName( model, file, sizeof( file ));
+
+	if( gEngfuncs.fsapi->FileExists( file, false ))
+	{
+		Q_snprintf( cmd, sizeof( cmd ), "exec %s\n", file );
+		gEngfuncs.Cbuf_AddText( cmd );
+	}
+}
+
+static void VR_WeaponSave_f( void )
+{
+	char text[768], file[96];
+	int i, len = 0;
+
+	if( !vr_tune_model[0] )
+	{
+		gEngfuncs.Con_Printf( "VR: hold a weapon first\n" );
+		return;
+	}
+
+	VR_WeaponFileName( vr_tune_model, file, sizeof( file ));
+
+	for( i = 0; i < VR_TUNE_COUNT; i++ )
+		len += Q_snprintf( text + len, sizeof( text ) - len, "%s %g\n", vr_tune_vars[i]->name, vr_tune_vars[i]->value );
+
+	if( gEngfuncs.fsapi->WriteFile( file, text, len ))
+		gEngfuncs.Con_Printf( "VR: saved settings for %s to %s\n", vr_tune_model, file );
+	else gEngfuncs.Con_Printf( S_ERROR "VR: can't write %s\n", file );
 }
 
 qboolean VR_BeginMainPass( const ref_viewpass_t *game )
@@ -1225,9 +1379,21 @@ static void VR_DrawHands( void )
 		if( h == 1 )
 		{
 			// laser from the right hand: bright when it is on the UI, dim otherwise
-			float len = vr.ui_hit ? vr.ui_dist * vr_worldscale.value : 40.0f;
+			vec3_t to_target;
+			float len = 40.0f;
+
+			if( vr.ui_hit )
+			{
+				len = vr.ui_dist * vr_worldscale.value;
+			}
+			else if( vr_aim_hit )
+			{
+				VectorSubtract( vr_aim_target, vr.hand[h].pos, to_target );
+				len = VectorLength( to_target );
+			}
 
 			if( vr.ui_hit ) pglColor3f( 0.2f, 1.0f, 1.0f );
+			else if( vr_aim_hit ) pglColor3f( 0.3f, 1.0f, 0.3f );
 			else pglColor3f( 0.35f, 0.35f, 0.45f );
 
 			VectorScale( vr.hand[h].fwd, 5.0f, a );
@@ -1236,6 +1402,17 @@ static void VR_DrawHands( void )
 			VectorScale( vr.hand[h].fwd, len, a );
 			VectorAdd( vr.hand[h].pos, a, b );
 			pglVertex3f( b[0], b[1], b[2] );
+
+			// a marker where the shot will land
+			if( !vr.ui_hit && vr_aim_hit )
+			{
+				float m = 1.0f + len * 0.01f;
+
+				pglColor3f( 1.0f, 0.2f, 0.2f );
+				pglVertex3f( b[0] - m, b[1], b[2] ); pglVertex3f( b[0] + m, b[1], b[2] );
+				pglVertex3f( b[0], b[1] - m, b[2] ); pglVertex3f( b[0], b[1] + m, b[2] );
+				pglVertex3f( b[0], b[1], b[2] - m ); pglVertex3f( b[0], b[1], b[2] + m );
+			}
 		}
 	}
 

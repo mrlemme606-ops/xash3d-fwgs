@@ -45,6 +45,7 @@ qboolean VR_UIRayHit( const float origin[3], const float dir[3], float *u, float
 qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles );
 
 float VR_GetViewModelScale( void );
-qboolean VR_HideViewModelMesh( int mesh, const char *texname );
+int VR_ViewModelMeshMode( int mesh, const char *texname );	// 0 = draw, 1 = hide, 2 = draw cut off at the wrist
+void VR_ViewModelClip( qboolean on );
 
 #endif // GL_VR_H

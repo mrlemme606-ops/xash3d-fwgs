@@ -2096,9 +2096,16 @@ static void R_StudioDrawPoints( void )
 		float s = 1.0f / (float)ptexture[pskinref[pmesh->skinref]].width;
 		float t = 1.0f / (float)ptexture[pskinref[pmesh->skinref]].height;
 
-		if( r_vr_viewmodel && RI.currententity == tr.viewent
-			&& VR_HideViewModelMesh( j, ptexture[pskinref[pmesh->skinref]].name ))
+		int vr_mesh_mode = 0;
+
+		if( r_vr_viewmodel && RI.currententity == tr.viewent )
+			vr_mesh_mode = VR_ViewModelMeshMode( j, ptexture[pskinref[pmesh->skinref]].name );
+
+		if( vr_mesh_mode == 1 )
 			continue;
+
+		if( vr_mesh_mode == 2 )
+			VR_ViewModelClip( true );
 
 		if( FBitSet( g_nFaceFlags, STUDIO_NF_MASKED ))
 		{
@@ -2138,6 +2145,9 @@ static void R_StudioDrawPoints( void )
 
 		r_stats.c_studio_polys += pmesh->numtris;
 		tr.blend = oldblend;
+
+		if( vr_mesh_mode == 2 )
+			VR_ViewModelClip( false );
 	}
 }
 
