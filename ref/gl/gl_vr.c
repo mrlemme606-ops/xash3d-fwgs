@@ -143,7 +143,15 @@ static CVAR_DEFINE_AUTO( vr_vm_pitch, "0", 0, "extra rotation of the weapon mode
 static CVAR_DEFINE_AUTO( vr_vm_yaw, "0", 0, "extra rotation of the weapon model: yaw degrees" );
 static CVAR_DEFINE_AUTO( vr_vm_roll, "0", 0, "extra rotation of the weapon model: roll degrees" );
 static CVAR_DEFINE_AUTO( vr_aim_trace, "1", 0, "1 = shots go to the exact point your hand ray hits, 0 = fixed distance (vr_aim_converge)" );
-static CVAR_DEFINE_AUTO( vr_aim_converge, "96", 0, "distance in units where the game's aim meets your hand's pointing direction" );
+static CVAR_DEFINE_AUTO( vr_aim_converge, "96", 0, "only used when vr_aim_trace is 0: distance in units where the game's aim meets your hand's pointing direction" );
+static CVAR_DEFINE_AUTO( vr_aim_debug, "0", 0, "print what the aim trace is doing about once a second" );
+static CVAR_DEFINE_AUTO( vr_vm_hide_bones, "Bip01 L +left", 0, "parts of the weapon model attached to bones whose name contains one of these are not drawn (the left arm). Separate with +. vr_vm_dump_tex 2 lists the bones" );
+static CVAR_DEFINE_AUTO( vr_vm_left_cut, "0", 0, "fallback for the left arm: hide model parts further than this many units to the left of your hand (0 = off)" );
+static CVAR_DEFINE_AUTO( vr_vm_cap_radius, "1.8", 0, "size of the disc that closes the cut-off arm at the wrist (0 = none)" );
+static CVAR_DEFINE_AUTO( vr_vm_cap_gray, "0.1", 0, "brightness of that disc, 0 = black, 1 = white" );
+static CVAR_DEFINE_AUTO( vr_melee_models, "fist+phone+knife+switchblade+branch+nightstick+syringe+crowbar+pipe+axe+hammer+bat", 0, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_melee_reach, "64", 0, "how far in front of your swinging hand the game looks for something to hit, in units" );
+static CVAR_DEFINE_AUTO( vr_melee_freeze, "1", 0, "1 = melee weapons hold their first animation frame, so only your real arm swings" );
 static CVAR_DEFINE_AUTO( vr_vm_scale, "0.5", 0, "size of the weapon model in your hand (1.0 = original)" );
 static CVAR_DEFINE_AUTO( vr_vm_hide_tex, "sleeve", 0, "texture name fragments of weapon model parts to hide completely. Separate with + (a comma does not work in the console)" );
 static CVAR_DEFINE_AUTO( vr_vm_clip_tex, "glove+hand+fingers+tex1+tex2", 0, "texture name fragments of weapon model parts (the arm) that are cut off behind the wrist. Separate with +" );
@@ -178,6 +186,7 @@ static struct
 	vec3_t		ref_pos;	// head position when recentered (game axes, units)
 	float		ref_head_ovr[3];	// head position when recentered (OpenVR axes, meters)
 	int		debug_frames;
+	int		aim_debug_frames;
 	float		ref_yaw;	// head yaw when recentered (degrees)
 
 	vec3_t		head_pos;	// current head position, OpenVR axes, meters
@@ -274,6 +283,14 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_grip_z );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_flip_roll );
 	gEngfuncs.Cvar_RegisterVariable( &vr_aim_converge );
+	gEngfuncs.Cvar_RegisterVariable( &vr_aim_debug );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_hide_bones );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_left_cut );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_cap_radius );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_cap_gray );
+	gEngfuncs.Cvar_RegisterVariable( &vr_melee_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_melee_reach );
+	gEngfuncs.Cvar_RegisterVariable( &vr_melee_freeze );
 	gEngfuncs.Cvar_RegisterVariable( &vr_aim_trace );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_yaw );
@@ -481,64 +498,131 @@ static void VR_UpdateHands( const ref_viewpass_t *game )
 
 static vec3_t vr_aim_target;
 static qboolean vr_aim_hit;	// the hand ray hit something, vr_aim_target is that point
+static qboolean vr_vm_melee;	// the weapon in hand is swung by hand
+static qboolean vr_dump_bones_done;
+static int vr_dbg_ent = -1;
+static float vr_dbg_fraction;
+static qboolean vr_dbg_solid;
 
-// the game aims, uses and shoots along angles we send it. Aim from the head toward the point your hand points at.
+#ifndef PM_STUDIO_BOX
+#define PM_STUDIO_BOX	0x00000002
+#endif
+
+// pitch and yaw (relative to base_yaw) that look from one point to another
+static void VR_AimAngles( const vec3_t from, const vec3_t to, float base_yaw, float *pitch, float *yaw )
+{
+	vec3_t d;
+	float xy;
+
+	VectorSubtract( to, from, d );
+	xy = sqrt( d[0] * d[0] + d[1] * d[1] );
+	*pitch = RAD2DEG( atan2( -d[2], xy ));
+	*yaw = RAD2DEG( atan2( d[1], d[0] )) - base_yaw;
+
+	while( *yaw > 180.0f ) *yaw -= 360.0f;
+	while( *yaw < -180.0f ) *yaw += 360.0f;
+}
+
+// where does a ray from start along dir hit the world, up to dist? out is the hit point, or the end of the ray
+static qboolean VR_TraceRay( const vec3_t start, const vec3_t dir, float dist, const vec3_t eye, vec3_t out )
+{
+	pmtrace_t hit;
+	vec3_t end, to_hit;
+
+	VectorMA( start, dist, dir, end );
+	hit = gEngfuncs.CL_TraceLine( (float *)start, end, PM_STUDIO_BOX );
+
+	vr_dbg_ent = hit.ent;
+	vr_dbg_fraction = hit.fraction;
+	vr_dbg_solid = hit.startsolid;
+
+	VectorCopy( end, out );
+
+	if( hit.startsolid || hit.fraction >= 1.0f )
+		return false;
+
+	// a hit right at the eye would make the aim jump around
+	VectorSubtract( hit.endpos, eye, to_hit );
+
+	if( DotProduct( to_hit, to_hit ) < 16.0f * 16.0f )
+		return false;
+
+	VectorCopy( hit.endpos, out );
+	return true;
+}
+
+// the game aims, uses and shoots along angles we send it. The server fires from the player's own eye,
+// so work out the angles from there to the point the hand ray hits (or far along the ray if it hits nothing).
+// Also: how fast the hand swings and where, for melee.
 static void VR_PublishAim( const ref_viewpass_t *game )
 {
-	vec3_t head, tmp, target, aim;
-	float xy, pitch, yaw;
-
-	if( !vr.hand[1].valid )
-	{
-		vr_aim_hit = false;
-		gEngfuncs.Cvar_SetValue( "vr_in_hand_valid", 0.0f );
-		return;
-	}
-
-	// the server fires from the player's own eye, not from where your head is in the room,
-	// so the shot angles must be worked out from there
-	VectorCopy( game->vieworigin, head );
-
-	// aim at the point the hand's ray actually hits, so the shot lands where the gun points.
-	// no hit (or a hit right at the head) falls back to a fixed distance along the ray.
-	VectorScale( vr.hand[1].fwd, vr_aim_converge.value, tmp );
-	VectorAdd( vr.hand[1].pos, tmp, target );
+	float d = game->viewangles[YAW] - vr.ref_yaw;
+	vec3_t eye, target, tmp, swing_dir, swing_target;
+	float pitch, yaw, speed = 0.0f;
+	uint32_t dev;
 
 	vr_aim_hit = false;
 
+	if( !vr.hand[1].valid )
+	{
+		gEngfuncs.Cvar_SetValue( "vr_in_hand_valid", 0.0f );
+		gEngfuncs.Cvar_SetValue( "vr_in_hand_speed", 0.0f );
+		return;
+	}
+
+	VectorCopy( game->vieworigin, eye );
+
 	if( vr_aim_trace.value )
 	{
-		pmtrace_t hit;
-		vec3_t end, to_hit;
-
-		VectorScale( vr.hand[1].fwd, 8192.0f, tmp );
-		VectorAdd( vr.hand[1].pos, tmp, end );
-		hit = gEngfuncs.CL_TraceLine( vr.hand[1].pos, end, PM_STUDIO_BOX );
-
-		if( !hit.startsolid && hit.fraction < 1.0f )
-		{
-			VectorSubtract( hit.endpos, head, to_hit );
-
-			if( DotProduct( to_hit, to_hit ) > 16.0f * 16.0f )
-			{
-				VectorCopy( hit.endpos, target );
-				vr_aim_hit = true;
-			}
-		}
+		vr_aim_hit = VR_TraceRay( vr.hand[1].pos, vr.hand[1].fwd, 8192.0f, eye, target );
 	}
+	else
+	{
+		VectorScale( vr.hand[1].fwd, vr_aim_converge.value, tmp );
+		VectorAdd( vr.hand[1].pos, tmp, target );
+	}
+
 	VectorCopy( target, vr_aim_target );
-	VectorSubtract( target, head, aim );
-
-	xy = sqrt( aim[0] * aim[0] + aim[1] * aim[1] );
-	pitch = RAD2DEG( atan2( -aim[2], xy ));
-	yaw = RAD2DEG( atan2( aim[1], aim[0] )) - game->viewangles[YAW];
-
-	while( yaw > 180.0f ) yaw -= 360.0f;
-	while( yaw < -180.0f ) yaw += 360.0f;
+	VR_AimAngles( eye, target, game->viewangles[YAW], &pitch, &yaw );
 
 	gEngfuncs.Cvar_SetValue( "vr_in_hand_pitch", pitch );
 	gEngfuncs.Cvar_SetValue( "vr_in_hand_yaw", yaw );
 	gEngfuncs.Cvar_SetValue( "vr_in_hand_valid", 1.0f );
+
+	// swing: hand velocity relative to the head, so walking around does not count
+	dev = VR_InputGetDevice( 1 );
+
+	if( dev < VR_MAX_DEVICES && vr.poses[dev].bPoseIsValid )
+	{
+		const float *hv = vr.poses[dev].vVelocity.v;
+		const float *kv = vr.poses[VR_HMD_INDEX].vVelocity.v;
+		float rel[3] = { hv[0] - kv[0], hv[1] - kv[1], hv[2] - kv[2] };
+		float spitch, syaw;
+
+		speed = sqrt( rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2] );
+
+		if( speed > 0.3f )
+		{
+			VR_ConvDir( rel, tmp );
+			VectorScale( tmp, 1.0f / speed, tmp );
+			VR_RotateZ( tmp, d, swing_dir );
+
+			VR_TraceRay( vr.hand[1].pos, swing_dir, vr_melee_reach.value, eye, swing_target );
+			VR_AimAngles( eye, swing_target, game->viewangles[YAW], &spitch, &syaw );
+
+			gEngfuncs.Cvar_SetValue( "vr_in_swing_pitch", spitch );
+			gEngfuncs.Cvar_SetValue( "vr_in_swing_yaw", syaw );
+		}
+	}
+
+	gEngfuncs.Cvar_SetValue( "vr_in_hand_speed", speed );
+
+	if( vr_aim_debug.value && ++vr.aim_debug_frames >= 72 )
+	{
+		vr.aim_debug_frames = 0;
+		gEngfuncs.Con_Printf( "VR aim: hit %d, fraction %.3f, startsolid %d, ent %d, pitch %.1f, yaw %.1f, hand speed %.2f m/s, melee %d\n",
+			vr_aim_hit, vr_dbg_fraction, vr_dbg_solid, vr_dbg_ent, pitch, yaw, speed, vr_vm_melee );
+	}
 }
 
 // does the right hand point at the UI panel? if so, tell the engine where, so it can move the cursor
@@ -626,23 +710,26 @@ static qboolean VR_ContainsNoCase( const char *s, const char *frag )
 	return false;
 }
 
-static qboolean VR_ListMatches( const char *list, const char *texname )
+static qboolean VR_ListMatches( const char *list, const char *name, qboolean split_on_space )
 {
 	const char *p = list;
+
+#define VR_IS_SEP( c ) ( (c) == '+' || (c) == '|' || (c) == ',' || (c) == ';' || ( split_on_space && (c) == ' ' ))
 
 	while( p && *p )
 	{
 		char frag[64];
 		int n = 0;
 
-		while( *p == '+' || *p == '|' || *p == ',' || *p == ';' || *p == ' ' ) p++;
-		while( *p && *p != '+' && *p != '|' && *p != ',' && *p != ';' && *p != ' ' && n < 63 ) frag[n++] = *p++;
+		while( *p && VR_IS_SEP( *p )) p++;
+		while( *p && !VR_IS_SEP( *p ) && n < 63 ) frag[n++] = *p++;
 		frag[n] = 0;
 
-		if( n && VR_ContainsNoCase( texname, frag ))
+		if( n && VR_ContainsNoCase( name, frag ))
 			return true;
 	}
 
+#undef VR_IS_SEP
 	return false;
 }
 
@@ -656,10 +743,10 @@ int VR_ViewModelMeshMode( int mesh, const char *texname )
 		vr_dump_done = true;
 	}
 
-	if( VR_ListMatches( vr_vm_hide_tex.string, texname ))
+	if( VR_ListMatches( vr_vm_hide_tex.string, texname, true ))
 		return 1;
 
-	if( VR_ListMatches( vr_vm_clip_tex.string, texname ))
+	if( VR_ListMatches( vr_vm_clip_tex.string, texname, true ))
 		return 2;
 
 	return 0;
@@ -695,6 +782,103 @@ void VR_ViewModelClip( qboolean on )
 	pglPopMatrix();
 }
 
+// bones: the left arm is found by bone name. vr_vm_dump_tex 2 prints them
+qboolean VR_WantBoneDump( void )
+{
+	if( vr_vm_dump_tex.value < 2.0f || vr_dump_bones_done )
+		return false;
+
+	vr_dump_bones_done = true;
+	vr_dump_done = true;
+	return true;
+}
+
+qboolean VR_ViewModelBoneHidden( const char *bonename )
+{
+	return VR_ListMatches( vr_vm_hide_bones.string, bonename, false );
+}
+
+// fallback for the left arm when bone names don't tell: anything far enough to the left of the hand
+qboolean VR_ViewModelVertexHidden( const float *pos )
+{
+	vec3_t rel;
+
+	if( vr_vm_left_cut.value <= 0.0f || !vr.hand[1].valid )
+		return false;
+
+	VectorSubtract( pos, vr.hand[1].pos, rel );
+	return DotProduct( rel, vr.hand[1].left ) > vr_vm_left_cut.value;
+}
+
+qboolean VR_ViewModelFrozen( void )
+{
+	return vr_vm_melee && vr_melee_freeze.value;
+}
+
+// a dark disc that closes the arm where it is cut off, so you can't look into it
+void VR_DrawArmCap( void )
+{
+	float proj[16], view[16], r = vr_vm_cap_radius.value, g = vr_vm_cap_gray.value;
+	vec3_t c;
+	int i, unit, saved_tmu;
+
+	if( r <= 0.0f || !vr_vm_clip_tex.string[0] || !vr.hand[1].valid )
+		return;
+
+	VectorMA( vr.hand[1].pos, -vr_vm_arm_cut.value, vr.hand[1].fwd, c );
+
+	Matrix4x4_ToArrayFloatGL( RI.projectionMatrix, proj );
+	Matrix4x4_ToArrayFloatGL( RI.worldviewMatrix, view );
+
+	saved_tmu = glState.activeTMU;
+	pglPushAttrib( GL_ALL_ATTRIB_BITS );
+
+	for( unit = GL_MaxTextureUnits() - 1; unit >= 0; unit-- )
+	{
+		GL_SelectTexture( unit );
+		pglDisable( GL_TEXTURE_2D );
+	}
+
+	pglDisable( GL_BLEND );
+	pglDisable( GL_ALPHA_TEST );
+	pglDisable( GL_CULL_FACE );
+	pglDisable( GL_FOG );
+	pglDisable( GL_CLIP_PLANE0 );
+	pglEnable( GL_DEPTH_TEST );
+	pglDepthMask( GL_TRUE );
+
+	pglMatrixMode( GL_PROJECTION );
+	pglPushMatrix();
+	pglLoadMatrixf( proj );
+	pglMatrixMode( GL_MODELVIEW );
+	pglPushMatrix();
+	pglLoadMatrixf( view );
+
+	pglColor3f( g, g, g );
+	pglBegin( GL_TRIANGLE_FAN );
+	pglVertex3f( c[0], c[1], c[2] );
+
+	for( i = 0; i <= 16; i++ )
+	{
+		float a = i * ( 2.0f * M_PI_F / 16.0f ), ca = cos( a ) * r, sa = sin( a ) * r;
+
+		pglVertex3f( c[0] + vr.hand[1].left[0] * ca + vr.hand[1].up[0] * sa,
+			c[1] + vr.hand[1].left[1] * ca + vr.hand[1].up[1] * sa,
+			c[2] + vr.hand[1].left[2] * ca + vr.hand[1].up[2] * sa );
+	}
+
+	pglEnd();
+
+	pglMatrixMode( GL_MODELVIEW );
+	pglPopMatrix();
+	pglMatrixMode( GL_PROJECTION );
+	pglPopMatrix();
+	pglMatrixMode( GL_MODELVIEW );
+
+	pglPopAttrib();
+	GL_SelectTexture( saved_tmu );
+}
+
 /*
 =================
 Per-weapon settings. The values of the weapon cvars when the first weapon shows up are the defaults.
@@ -705,7 +889,7 @@ When you switch weapons they are restored, then vr_weapon_<model>.cfg is run if 
 static convar_t *vr_tune_vars[] =
 {
 	&vr_vm_grip_x, &vr_vm_grip_y, &vr_vm_grip_z, &vr_vm_pitch, &vr_vm_yaw,
-	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut
+	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut, &vr_vm_left_cut
 };
 
 #define VR_TUNE_COUNT ( (int)( sizeof( vr_tune_vars ) / sizeof( vr_tune_vars[0] )))
@@ -714,10 +898,10 @@ static float vr_tune_base[16];
 static qboolean vr_tune_have_base;
 static char vr_tune_model[64];
 
-static void VR_WeaponFileName( const char *modelname, char *out, size_t size )
+// "models/weapons/glock/v_glock.mdl" -> "v_glock"
+static void VR_ModelBaseName( const char *modelname, char *out, size_t size )
 {
 	const char *base = modelname, *p;
-	char name[48];
 	size_t n = 0;
 
 	for( p = modelname; *p; p++ )
@@ -726,10 +910,17 @@ static void VR_WeaponFileName( const char *modelname, char *out, size_t size )
 			base = p + 1;
 	}
 
-	while( *base && *base != '.' && n < sizeof( name ) - 1 )
-		name[n++] = *base++;
+	while( *base && *base != '.' && n < size - 1 )
+		out[n++] = *base++;
 
-	name[n] = 0;
+	out[n] = 0;
+}
+
+static void VR_WeaponFileName( const char *modelname, char *out, size_t size )
+{
+	char name[48];
+
+	VR_ModelBaseName( modelname, name, sizeof( name ));
 	Q_snprintf( out, size, "vr_weapon_%s.cfg", name );
 }
 
@@ -762,6 +953,15 @@ static void VR_UpdateWeaponProfile( void )
 	}
 
 	Q_strncpy( vr_tune_model, model, sizeof( vr_tune_model ));
+
+	{
+		char base[48];
+
+		VR_ModelBaseName( model, base, sizeof( base ));
+		vr_vm_melee = VR_ListMatches( vr_melee_models.string, base, true );
+		gEngfuncs.Cvar_SetValue( "vr_in_melee", vr_vm_melee ? 1.0f : 0.0f );
+	}
+
 	VR_WeaponFileName( model, file, sizeof( file ));
 
 	if( gEngfuncs.fsapi->FileExists( file, false ))
@@ -1649,6 +1849,7 @@ void VR_FinishFrame( void )
 	if( vr_dump_done )
 	{
 		vr_dump_done = false;
+		vr_dump_bones_done = false;
 		gEngfuncs.Cvar_SetValue( "vr_vm_dump_tex", 0.0f );
 	}
 

@@ -118,6 +118,11 @@ typedef struct
 	GLubyte			arraycolor[MAXSTUDIOVERTS][4];
 	uint			numverts;
 	uint			numelems;
+
+	// VR weapon: parts of the model that are not drawn (the left arm)
+	unsigned short	arraysrc[MAXSTUDIOVERTS];	// model vertex of each array vertex
+	byte			vr_hidden[MAXSTUDIOVERTS];
+	qboolean		vr_filter;
 } studio_draw_state_t;
 
 // studio-related cvars
@@ -1773,6 +1778,7 @@ static void R_StudioBuildArrayNormalMesh( short *ptricmds, vec3_t *pstudionorms,
 		for( ; i > 0; i--, ptricmds += 4 )
 		{
 			GLubyte *cl = g_studio.arraycolor[g_studio.numverts];
+			g_studio.arraysrc[g_studio.numverts] = ptricmds[0];
 
 			vertexState = R_StudioBuildIndices( tri_strip, vertexState );
 
@@ -1812,6 +1818,7 @@ static void R_StudioBuildArrayFloatMesh( short *ptricmds, vec3_t *pstudionorms )
 		for( ; i > 0; i--, ptricmds += 4 )
 		{
 			GLubyte *cl = g_studio.arraycolor[g_studio.numverts];
+			g_studio.arraysrc[g_studio.numverts] = ptricmds[0];
 
 			vertexState = R_StudioBuildIndices( tri_strip, vertexState );
 
@@ -1852,6 +1859,7 @@ static void R_StudioBuildArrayChromeMesh( short *ptricmds, vec3_t *pstudionorms,
 		for( ; i > 0; i--, ptricmds += 4 )
 		{
 			GLubyte *cl = g_studio.arraycolor[g_studio.numverts];
+			g_studio.arraysrc[g_studio.numverts] = ptricmds[0];
 
 			vertexState = R_StudioBuildIndices( tri_strip, vertexState );
 
@@ -1891,6 +1899,29 @@ static void R_StudioDrawArrays( uint startverts, uint startelems )
 {
 	if( g_studio.numelems == startelems )
 		return;
+
+	if( g_studio.vr_filter )
+	{
+		// drop every triangle that touches a hidden vertex
+		uint out = startelems;
+
+		for( uint e = startelems; e + 2 < g_studio.numelems; e += 3 )
+		{
+			if( g_studio.vr_hidden[g_studio.arraysrc[g_studio.arrayelems[e]]]
+				|| g_studio.vr_hidden[g_studio.arraysrc[g_studio.arrayelems[e + 1]]]
+				|| g_studio.vr_hidden[g_studio.arraysrc[g_studio.arrayelems[e + 2]]] )
+				continue;
+
+			g_studio.arrayelems[out++] = g_studio.arrayelems[e];
+			g_studio.arrayelems[out++] = g_studio.arrayelems[e + 1];
+			g_studio.arrayelems[out++] = g_studio.arrayelems[e + 2];
+		}
+
+		g_studio.numelems = out;
+
+		if( g_studio.numelems == startelems )
+			return;
+	}
 
 	pglEnableClientState( GL_VERTEX_ARRAY );
 	pglVertexPointer( 3, GL_FLOAT, 12, g_studio.arrayverts );
@@ -2006,6 +2037,29 @@ static void R_StudioDrawPoints( void )
 
 		for( int i = 0; i < numverts; i++ )
 			R_LightStrength( pvertbone[i], pstudioverts[i], g_studio.lightpos[i] );
+	}
+
+	g_studio.vr_filter = false;
+
+	if( r_vr_viewmodel && RI.currententity == tr.viewent )
+	{
+		byte bonehide[MAXSTUDIOBONES];
+		mstudiobone_t *vrbones = (mstudiobone_t *)((byte *)m_pStudioHeader + m_pStudioHeader->boneindex);
+		int nb = Q_min( m_pStudioHeader->numbones, MAXSTUDIOBONES );
+
+		if( VR_WantBoneDump( ))
+		{
+			for( int b = 0; b < m_pStudioHeader->numbones; b++ )
+				gEngfuncs.Con_Printf( "VR weapon bone %d: '%s' (parent %d)\n", b, vrbones[b].name, vrbones[b].parent );
+		}
+
+		for( int b = 0; b < nb; b++ )
+			bonehide[b] = VR_ViewModelBoneHidden( vrbones[b].name );
+
+		for( int i = 0; i < numverts; i++ )
+			g_studio.vr_hidden[i] = ( pvertbone[i] < nb && bonehide[pvertbone[i]] ) || VR_ViewModelVertexHidden( g_studio.verts[i] );
+
+		g_studio.vr_filter = true;
 	}
 
 	// generate shared normals for properly scaling glowing shell
@@ -3381,6 +3435,11 @@ void R_DrawViewModel( void )
 
 	// adjust the depth range to prevent view model from poking into walls
 	r_vr_viewmodel = vr_hand;
+
+	// melee weapons: hold the first frame, your own arm does the swinging
+	if( vr_hand && VR_ViewModelFrozen( ))
+		g_studio.interpolate = false;
+
 	pglDepthRange( gldepthmin, gldepthmin + VIEWMODEL_DEPTH_RANGE * ( gldepthmax - gldepthmin ));
 	RI.currentmodel = RI.currententity->model;
 
@@ -3393,6 +3452,12 @@ void R_DrawViewModel( void )
 		R_StudioSetupTimings();
 		R_StudioDrawModelInternal( RI.currententity, STUDIO_RENDER );
 		break;
+	}
+
+	if( vr_hand )
+	{
+		VR_DrawArmCap();
+		g_studio.interpolate = true;
 	}
 
 	r_vr_viewmodel = false;

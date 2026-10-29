@@ -34,6 +34,10 @@ static CVAR_DEFINE_AUTO( vr_in_hand_pitch, "0", 0, "(internal) aim pitch toward 
 static CVAR_DEFINE_AUTO( vr_in_ui_hit, "0", 0, "(internal) the right hand points at the UI panel" );
 static CVAR_DEFINE_AUTO( vr_in_ui_x, "0", 0, "(internal) where on the UI panel, 0..1 from the left" );
 static CVAR_DEFINE_AUTO( vr_in_ui_y, "0", 0, "(internal) where on the UI panel, 0..1 from the top" );
+static CVAR_DEFINE_AUTO( vr_in_hand_speed, "0", 0, "(internal) right hand speed relative to the head, m/s" );
+static CVAR_DEFINE_AUTO( vr_in_swing_yaw, "0", 0, "(internal) aim yaw toward where the right hand is swinging" );
+static CVAR_DEFINE_AUTO( vr_in_swing_pitch, "0", 0, "(internal) aim pitch toward where the right hand is swinging" );
+static CVAR_DEFINE_AUTO( vr_in_melee, "0", 0, "(internal) the weapon in hand is swung by hand" );
 static CVAR_DEFINE_AUTO( vr_in_crouch, "0", 0, "(internal) physically crouching" );
 static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
 
@@ -43,6 +47,11 @@ static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
 static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = body (mouse), 1 = head, 2 = right hand while you use/shoot and head otherwise (default), 3 = right hand always" );
 static CVAR_DEFINE_AUTO( vr_move_digital, "1", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
+static CVAR_DEFINE_AUTO( vr_melee_enable, "1", FCVAR_ARCHIVE, "1 = swinging your hand fast with a melee weapon attacks" );
+static CVAR_DEFINE_AUTO( vr_melee_speed, "2.0", FCVAR_ARCHIVE, "hand speed in m/s that counts as a swing" );
+static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.45", FCVAR_ARCHIVE, "seconds between two swings" );
+static CVAR_DEFINE_AUTO( vr_key_swing, "mouse1", FCVAR_ARCHIVE, "key pressed when you swing a melee weapon" );
+static CVAR_DEFINE_AUTO( vr_key_whip, "", FCVAR_ARCHIVE, "key pressed when you swing a gun (pistol whip). empty = nothing" );
 static CVAR_DEFINE_AUTO( vr_debug_move, "0", 0, "print the player's movement type when it changes (helps find where analog movement fails)" );
 
 // which key each controller button presses. single character, or mouse1/2/3, space, ctrl, shift, enter, tab, escape. empty = nothing
@@ -69,6 +78,7 @@ enum
 	VRB_JUMP,	// made here from the right stick flick, not published by the renderer
 	VRB_CROUCH,	// likewise
 	VRB_FORWARD, VRB_BACK, VRB_LEFT, VRB_RIGHT,	// left stick as keys (digital walking)
+	VRB_SWING, VRB_WHIP,	// made here from a fast hand swing
 	VRB_COUNT
 };
 
@@ -77,7 +87,8 @@ static convar_t *vr_key_cvars[VRB_COUNT] =
 	&vr_key_rtrigger, &vr_key_ltrigger, &vr_key_rgrip, &vr_key_lgrip, &vr_key_a,
 	&vr_key_b, &vr_key_x, &vr_key_y, &vr_key_lstick, &vr_key_rstick,
 	&vr_key_jump, &vr_key_crouch,
-	&vr_key_forward, &vr_key_back, &vr_key_left, &vr_key_right
+	&vr_key_forward, &vr_key_back, &vr_key_left, &vr_key_right,
+	&vr_key_swing, &vr_key_whip
 };
 
 static int vr_pressed_key[VRB_COUNT];	// key code sent on press, 0 = not held
@@ -88,6 +99,11 @@ static qboolean vr_crouch_toggled;
 static int vr_jump_frames;
 static qboolean vr_dir_down[4];	// forward, back, left, right (with hysteresis)
 static int vr_last_movetype = -1;
+static double vr_swing_until;	// aim along the swing until this time
+static double vr_melee_next;	// no new swing before this time
+static float vr_swing_yaw, vr_swing_pitch;
+static int vr_swing_frames;
+static qboolean vr_swing_whip;
 static double vr_hand_aim_until;	// keep aiming with the hand until this time
 
 // mouse buttons must take the same path as a real mouse (menus and the client listen there), keys can go straight in
@@ -143,6 +159,13 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_ui_hit );
 	Cvar_RegisterVariable( &vr_in_ui_x );
 	Cvar_RegisterVariable( &vr_in_ui_y );
+	Cvar_RegisterVariable( &vr_in_hand_speed );
+	Cvar_RegisterVariable( &vr_in_swing_yaw );
+	Cvar_RegisterVariable( &vr_in_swing_pitch );
+	Cvar_RegisterVariable( &vr_in_melee );
+	Cvar_RegisterVariable( &vr_melee_enable );
+	Cvar_RegisterVariable( &vr_melee_speed );
+	Cvar_RegisterVariable( &vr_melee_cooldown );
 	Cvar_RegisterVariable( &vr_in_crouch );
 	Cvar_RegisterVariable( &vr_in_buttons );
 	Cvar_RegisterVariable( &vr_turn_mode );
@@ -266,7 +289,32 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	if( buttons & ( BIT( VRB_RTRIGGER ) | BIT( VRB_LTRIGGER ) | BIT( VRB_RGRIP ) | BIT( VRB_B )))
 		vr_hand_aim_until = host.realtime + 0.35;
 
-	if( vr_in_hand_valid.value > 0.5f && ( mode >= 3 || ( mode == 2 && host.realtime < vr_hand_aim_until )))
+	// swinging a weapon by hand: a fast hand movement attacks, aimed where the hand is going
+	if( in_game && vr_melee_enable.value && vr_in_hand_valid.value > 0.5f
+		&& vr_in_hand_speed.value > vr_melee_speed.value && host.realtime >= vr_melee_next
+		&& ( vr_in_melee.value > 0.5f || !COM_StringEmptyOrNULL( vr_key_whip.string )))
+	{
+		vr_melee_next = host.realtime + vr_melee_cooldown.value;
+		vr_swing_until = host.realtime + 0.3;
+		vr_swing_yaw = vr_in_swing_yaw.value;
+		vr_swing_pitch = vr_in_swing_pitch.value;
+		vr_swing_frames = 3;
+		vr_swing_whip = vr_in_melee.value < 0.5f;
+	}
+
+	if( vr_swing_frames > 0 )
+	{
+		buttons |= BIT( vr_swing_whip ? VRB_WHIP : VRB_SWING );
+		vr_swing_frames--;
+	}
+
+	if( host.realtime < vr_swing_until )
+	{
+		mode = 2;
+		aim_rel = vr_swing_yaw;
+		aim_pitch = vr_swing_pitch;
+	}
+	else if( vr_in_hand_valid.value > 0.5f && ( mode >= 3 || ( mode == 2 && host.realtime < vr_hand_aim_until )))
 	{
 		mode = 2;
 		aim_rel = vr_in_hand_yaw.value;

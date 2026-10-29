@@ -47,5 +47,10 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles );
 float VR_GetViewModelScale( void );
 int VR_ViewModelMeshMode( int mesh, const char *texname );	// 0 = draw, 1 = hide, 2 = draw cut off at the wrist
 void VR_ViewModelClip( qboolean on );
+void VR_DrawArmCap( void );
+qboolean VR_ViewModelFrozen( void );
+qboolean VR_WantBoneDump( void );
+qboolean VR_ViewModelBoneHidden( const char *bonename );
+qboolean VR_ViewModelVertexHidden( const float *pos );
 
 #endif // GL_VR_H
