@@ -933,6 +933,7 @@ void SCR_Init( void )
 	// register our commands
 	Cmd_AddCommand( "skyname", CL_SetSky_f, "set new skybox by basename" );
 	Cmd_AddCommand( "loadsky", CL_SetSky_f, "set new skybox by basename" );
+	Cmd_AddCommand( "skymap", CL_SkyMap_f, "set new skybox by basename and remember it for this map (skies.txt)" );
 	Cmd_AddCommand( "viewpos", SCR_Viewpos_f, "prints current player origin" );
 	Cmd_AddCommand( "sizeup", SCR_SizeUp_f, "screen size up to 10 points" );
 	Cmd_AddCommand( "sizedown", SCR_SizeDown_f, "screen size down to 10 points" );

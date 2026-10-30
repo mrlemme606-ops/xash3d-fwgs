@@ -151,6 +151,11 @@ static CVAR_DEFINE_AUTO( vr_vm_cap_radius, "1.8", 0, "size of the disc that clos
 static CVAR_DEFINE_AUTO( vr_vm_cap_gray, "0.1", 0, "brightness of that disc, 0 = black, 1 = white" );
 static CVAR_DEFINE_AUTO( vr_melee_models, "fist+phone+knife+switchblade+branch+nightstick+syringe+crowbar+pipe+axe+hammer+bat", 0, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
 static CVAR_DEFINE_AUTO( vr_melee_reach, "64", 0, "how far in front of your swinging hand the game looks for something to hit, in units" );
+static CVAR_DEFINE_AUTO( vr_phone_light, "1", 0, "1 = a spotlight shines from the weapons listed in vr_light_models, where your hand points" );
+static CVAR_DEFINE_AUTO( vr_light_models, "phone", 0, "weapon model names (part of the file name) that work as a flashlight. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_light_distance, "700", 0, "how far the flashlight reaches, in units" );
+static CVAR_DEFINE_AUTO( vr_light_radius, "150", 0, "size of the lit area, in units" );
+static CVAR_DEFINE_AUTO( vr_light_brightness, "200", 0, "brightness of the flashlight, 0 to 255" );
 static CVAR_DEFINE_AUTO( vr_melee_freeze, "1", 0, "1 = melee weapons hold their first animation frame, so only your real arm swings" );
 static CVAR_DEFINE_AUTO( vr_vm_scale, "0.5", 0, "size of the weapon model in your hand (1.0 = original)" );
 static CVAR_DEFINE_AUTO( vr_vm_hide_tex, "sleeve", 0, "texture name fragments of weapon model parts to hide completely. Separate with + (a comma does not work in the console)" );
@@ -295,6 +300,11 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_freeze );
+	gEngfuncs.Cvar_RegisterVariable( &vr_phone_light );
+	gEngfuncs.Cvar_RegisterVariable( &vr_light_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_light_distance );
+	gEngfuncs.Cvar_RegisterVariable( &vr_light_radius );
+	gEngfuncs.Cvar_RegisterVariable( &vr_light_brightness );
 	gEngfuncs.Cvar_RegisterVariable( &vr_aim_trace );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_yaw );
@@ -502,6 +512,7 @@ static void VR_UpdateHands( const ref_viewpass_t *game )
 
 static vec3_t vr_aim_target;
 static qboolean vr_aim_hit;	// the hand ray hit something, vr_aim_target is that point
+static qboolean vr_vm_light;	// the weapon in hand is a flashlight (the phone)
 static qboolean vr_vm_melee;	// the weapon in hand is swung by hand
 static qboolean vr_dump_bones_done;
 static int vr_dbg_ent = -1;
@@ -592,6 +603,14 @@ static void VR_PublishAim( const ref_viewpass_t *game )
 	gEngfuncs.Cvar_SetValue( "vr_in_hand_pitch", pitch );
 	gEngfuncs.Cvar_SetValue( "vr_in_hand_yaw", yaw );
 	gEngfuncs.Cvar_SetValue( "vr_in_hand_valid", 1.0f );
+
+	// for the flashlight, which lives in the engine
+	gEngfuncs.Cvar_SetValue( "vr_in_ray_x", vr.hand[1].pos[0] );
+	gEngfuncs.Cvar_SetValue( "vr_in_ray_y", vr.hand[1].pos[1] );
+	gEngfuncs.Cvar_SetValue( "vr_in_ray_z", vr.hand[1].pos[2] );
+	gEngfuncs.Cvar_SetValue( "vr_in_ray_dx", vr.hand[1].fwd[0] );
+	gEngfuncs.Cvar_SetValue( "vr_in_ray_dy", vr.hand[1].fwd[1] );
+	gEngfuncs.Cvar_SetValue( "vr_in_ray_dz", vr.hand[1].fwd[2] );
 
 	// swing: hand velocity relative to the head, so walking around does not count
 	dev = VR_InputGetDevice( 1 );
@@ -964,6 +983,7 @@ static void VR_UpdateWeaponProfile( void )
 
 		VR_ModelBaseName( model, base, sizeof( base ));
 		vr_vm_melee = VR_ListMatches( vr_melee_models.string, base, true );
+		vr_vm_light = VR_ListMatches( vr_light_models.string, base, true );
 		gEngfuncs.Cvar_SetValue( "vr_in_melee", vr_vm_melee ? 1.0f : 0.0f );
 	}
 
@@ -1015,6 +1035,61 @@ static void VR_TrackCamera( const ref_viewpass_t *game )
 	}
 
 	vr_cam_have = true;
+}
+
+#define VR_LIGHT_KEY	0x5652	// so we always reuse the same dynamic light
+
+static dlight_t *VR_AllocLight( void )
+{
+	int i, freeslot = -1;
+
+	for( i = 0; i < MAX_DLIGHTS; i++ )
+	{
+		if( gp_dlights[i].key == VR_LIGHT_KEY )
+			return &gp_dlights[i];
+
+		if( freeslot < 0 && ( gp_dlights[i].die < gp_cl->time || !gp_dlights[i].radius ))
+			freeslot = i;
+	}
+
+	if( freeslot < 0 )
+		return NULL;
+
+	memset( &gp_dlights[freeslot], 0, sizeof( dlight_t ));
+	gp_dlights[freeslot].key = VR_LIGHT_KEY;
+	return &gp_dlights[freeslot];
+}
+
+// a spotlight pool where the hand points, lit with the engine's dynamic light so both eyes see it
+static void VR_UpdateHandLight( const ref_viewpass_t *game )
+{
+	vec3_t end, org, to;
+	dlight_t *dl;
+	float dist, bright;
+	qboolean hit;
+
+	if( !vr_phone_light.value || !vr_vm_light || !vr.hand[1].valid )
+		return;
+
+	hit = VR_TraceRay( vr.hand[1].pos, vr.hand[1].fwd, vr_light_distance.value, game->vieworigin, end );
+
+	// a little in front of the surface, so the light does not sit inside it
+	if( hit ) VectorMA( end, -8.0f, vr.hand[1].fwd, org );
+	else VectorCopy( end, org );
+
+	VectorSubtract( org, vr.hand[1].pos, to );
+	dist = VectorLength( to );
+	bright = vr_light_brightness.value / ( 1.0f + ( dist / 350.0f ) * ( dist / 350.0f ));
+
+	if( !( dl = VR_AllocLight( )))
+		return;
+
+	VectorCopy( org, dl->origin );
+	dl->radius = vr_light_radius.value;
+	dl->color.r = (uint8_t)bound( 40.0f, bright, 255.0f );
+	dl->color.g = (uint8_t)bound( 40.0f, bright * 0.96f, 255.0f );
+	dl->color.b = (uint8_t)bound( 40.0f, bright * 0.85f, 255.0f );
+	dl->die = gp_cl->time + 0.05f;
 }
 
 qboolean VR_BeginMainPass( const ref_viewpass_t *game )
@@ -1099,6 +1174,7 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 
 	VR_UpdateHands( game );
 	VR_PublishAim( game );
+	VR_UpdateHandLight( game );
 	VR_PublishUI();
 
 	return true;

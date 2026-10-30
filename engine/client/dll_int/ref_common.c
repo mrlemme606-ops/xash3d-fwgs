@@ -101,6 +101,67 @@ static qboolean CheckSkybox( const char *name, char out[SKYBOX_MAX_SIDES][MAX_ST
 	return false;
 }
 
+/*
+=================
+skies.txt in the game folder lists which sky each map uses, one "mapname skyname" per line,
+and "default skyname" for every other map. Cry of Fear's maps name a sky that is not shipped
+(the game's own renderer picks one), so without this every map falls back to blue22.
+The last matching line wins. The "skymap" command adds a line.
+=================
+*/
+static qboolean R_MapSkyOverride( char *out, size_t size )
+{
+	fs_offset_t len = 0;
+	byte *buf = FS_LoadFile( "skies.txt", &len, false );
+	char mapsky[MAX_QPATH] = "", defsky[MAX_QPATH] = "";
+	const char *p;
+
+	if( !buf )
+		return false;
+
+	p = (const char *)buf;
+
+	while( *p )
+	{
+		char key[MAX_QPATH], val[MAX_QPATH];
+		int n = 0;
+
+		while( *p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' ) p++;
+		while( *p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' && n < MAX_QPATH - 1 ) key[n++] = *p++;
+		key[n] = 0;
+
+		if( key[0] == '/' && key[1] == '/' )
+		{
+			while( *p && *p != '\n' ) p++;
+			continue;
+		}
+
+		while( *p == ' ' || *p == '\t' ) p++;
+		n = 0;
+		while( *p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' && n < MAX_QPATH - 1 ) val[n++] = *p++;
+		val[n] = 0;
+		while( *p && *p != '\n' ) p++;
+
+		if( !key[0] || !val[0] )
+			continue;
+
+		if( !Q_stricmp( key, clgame.mapname ))
+			Q_strncpy( mapsky, val, sizeof( mapsky ));
+		else if( !Q_stricmp( key, "default" ))
+			Q_strncpy( defsky, val, sizeof( defsky ));
+	}
+
+	Mem_Free( buf );
+
+	if( mapsky[0] )
+		Q_strncpy( out, mapsky, size );
+	else if( defsky[0] )
+		Q_strncpy( out, defsky, size );
+	else return false;
+
+	return true;
+}
+
 void R_SetupSky( const char *name )
 {
 	string loadname;
@@ -126,8 +187,13 @@ void R_SetupSky( const char *name )
 	// to prevent infinite recursion if default skybox was missed
 	if( !CheckSkybox( loadname, sidenames ) && Q_stricmp( name, DEFAULT_SKYBOX_NAME ))
 	{
+		char mapsky[MAX_QPATH];
+
 		Con_Reportf( S_WARN "missed or incomplete skybox '%s'\n", name );
-		R_SetupSky( DEFAULT_SKYBOX_NAME ); // force to default
+
+		if( R_MapSkyOverride( mapsky, sizeof( mapsky )) && Q_stricmp( mapsky, name ))
+			R_SetupSky( mapsky ); // from skies.txt
+		else R_SetupSky( DEFAULT_SKYBOX_NAME ); // force to default
 		return;
 	}
 

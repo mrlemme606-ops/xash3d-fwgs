@@ -459,6 +459,52 @@ void CL_SetSky_f( void )
 }
 
 /*
+=================
+CL_SkyMap_f
+
+Set a skybox and remember it for the current map (adds a line to skies.txt)
+=================
+*/
+void CL_SkyMap_f( void )
+{
+	fs_offset_t len = 0;
+	byte *old;
+	char *text;
+	size_t oldlen, size;
+
+	if( Cmd_Argc() < 2 || COM_StringEmptyOrNULL( clgame.mapname ))
+	{
+		Con_Printf( S_USAGE "skymap <skybox>   (use it while in a map)\n" );
+		return;
+	}
+
+	R_SetupSky( Cmd_Argv( 1 ));
+
+	old = FS_LoadFile( "skies.txt", &len, false );
+	oldlen = old ? (size_t)len : 0;
+	size = oldlen + MAX_QPATH * 2 + 4;
+	text = Mem_Malloc( host.mempool, size );
+
+	if( oldlen )
+	{
+		memcpy( text, old, oldlen );
+
+		if( text[oldlen - 1] != '\n' )
+			text[oldlen++] = '\n';
+	}
+
+	oldlen += Q_snprintf( text + oldlen, size - oldlen, "%s %s\n", clgame.mapname, Cmd_Argv( 1 ));
+	FS_WriteFile( "skies.txt", text, oldlen );
+
+	Mem_Free( text );
+
+	if( old )
+		Mem_Free( old );
+
+	Con_Printf( "%s will use the sky '%s' from now on (saved in skies.txt)\n", clgame.mapname, Cmd_Argv( 1 ));
+}
+
+/*
 =============
 SCR_Viewpos_f
 

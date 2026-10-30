@@ -38,6 +38,12 @@ static CVAR_DEFINE_AUTO( vr_in_hand_speed, "0", 0, "(internal) right hand speed 
 static CVAR_DEFINE_AUTO( vr_in_swing_yaw, "0", 0, "(internal) aim yaw toward where the right hand is swinging" );
 static CVAR_DEFINE_AUTO( vr_in_swing_pitch, "0", 0, "(internal) aim pitch toward where the right hand is swinging" );
 static CVAR_DEFINE_AUTO( vr_in_melee, "0", 0, "(internal) the weapon in hand is swung by hand" );
+static CVAR_DEFINE_AUTO( vr_in_ray_x, "0", 0, "(internal) right hand position in the game world" );
+static CVAR_DEFINE_AUTO( vr_in_ray_y, "0", 0, "(internal) right hand position in the game world" );
+static CVAR_DEFINE_AUTO( vr_in_ray_z, "0", 0, "(internal) right hand position in the game world" );
+static CVAR_DEFINE_AUTO( vr_in_ray_dx, "0", 0, "(internal) direction the right hand points" );
+static CVAR_DEFINE_AUTO( vr_in_ray_dy, "0", 0, "(internal) direction the right hand points" );
+static CVAR_DEFINE_AUTO( vr_in_ray_dz, "0", 0, "(internal) direction the right hand points" );
 static CVAR_DEFINE_AUTO( vr_in_crouch, "0", 0, "(internal) physically crouching" );
 static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
 
@@ -142,6 +148,17 @@ static int IN_VRKeyFromName( const char *name )
 	return 0;
 }
 
+// where the right hand is and where it points (game world), used to aim the flashlight
+qboolean IN_VRGetRay( vec3_t origin, vec3_t dir )
+{
+	if( vr_in_active.value <= 0.0f || vr_in_hand_valid.value < 0.5f )
+		return false;
+
+	VectorSet( origin, vr_in_ray_x.value, vr_in_ray_y.value, vr_in_ray_z.value );
+	VectorSet( dir, vr_in_ray_dx.value, vr_in_ray_dy.value, vr_in_ray_dz.value );
+	return true;
+}
+
 void IN_VRInit( void )
 {
 	int i;
@@ -166,6 +183,12 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_melee_enable );
 	Cvar_RegisterVariable( &vr_melee_speed );
 	Cvar_RegisterVariable( &vr_melee_cooldown );
+	Cvar_RegisterVariable( &vr_in_ray_x );
+	Cvar_RegisterVariable( &vr_in_ray_y );
+	Cvar_RegisterVariable( &vr_in_ray_z );
+	Cvar_RegisterVariable( &vr_in_ray_dx );
+	Cvar_RegisterVariable( &vr_in_ray_dy );
+	Cvar_RegisterVariable( &vr_in_ray_dz );
 	Cvar_RegisterVariable( &vr_in_crouch );
 	Cvar_RegisterVariable( &vr_in_buttons );
 	Cvar_RegisterVariable( &vr_turn_mode );

@@ -51,6 +51,7 @@ void IN_LockInputDevices( qboolean lock );
 void IN_EngineAppendMove( float frametime, usercmd_t *cmd, qboolean active );
 void IN_VRInit( void );
 void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active );
+qboolean IN_VRGetRay( vec3_t origin, vec3_t dir );
 
 void IN_SetRelativeMouseMode( qboolean set );
 void IN_SetMouseGrab( qboolean set );

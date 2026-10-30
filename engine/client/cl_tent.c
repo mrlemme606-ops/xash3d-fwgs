@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "entity_types.h"
 #include "triangleapi.h"
 #include "cl_tent.h"
+#include "input.h"
 #include "pm_local.h"
 #include "studio.h"
 #include "wadfile.h"	// acess decal size
@@ -2633,6 +2634,11 @@ static void CL_UpdateFlashlight( cl_entity_t *ent )
 	}
 
 	VectorAdd( ent->origin, view_ofs, vecSrc );
+
+	// VR: the light comes from the hand, along where it points
+	if( ent->index == ( cl.playernum + 1 ))
+		IN_VRGetRay( vecSrc, forward );
+
 	VectorMA( vecSrc, FLASHLIGHT_DISTANCE, forward, vecEnd );
 
 	trace = CL_TraceLine( vecSrc, vecEnd, PM_STUDIO_BOX );
