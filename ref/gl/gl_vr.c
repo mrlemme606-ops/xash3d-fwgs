@@ -160,6 +160,10 @@ static CVAR_DEFINE_AUTO( vr_vm_dump_tex, "0", 0, "1 = print the texture name of 
 static qboolean vr_dump_done;
 static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
 
+// diagnostic: how much the game moves the camera by itself (view sway, kicks, smoothing) over one second
+static float vr_cam_min[6], vr_cam_max[6];
+static qboolean vr_cam_have;
+
 static struct
 {
 	pfnVR_GetGenericInterface	get_interface;
@@ -632,6 +636,7 @@ static void VR_PublishUI( void )
 
 	vr.ui_hit = vr.hand[1].valid && VR_UIRayHit( vr.hand[1].origin_t, vr.hand[1].dir_t, &u, &v, &dist );
 	vr.ui_dist = dist;
+	VR_UISetPointer( vr.ui_hit, u, v );
 
 	gEngfuncs.Cvar_SetValue( "vr_in_ui_hit", vr.ui_hit ? 1.0f : 0.0f );
 
@@ -992,6 +997,26 @@ static void VR_WeaponSave_f( void )
 	else gEngfuncs.Con_Printf( S_ERROR "VR: can't write %s\n", file );
 }
 
+static void VR_TrackCamera( const ref_viewpass_t *game )
+{
+	float v[6];
+	int i;
+
+	for( i = 0; i < 3; i++ )
+	{
+		v[i] = game->viewangles[i];
+		v[3 + i] = game->vieworigin[i];
+	}
+
+	for( i = 0; i < 6; i++ )
+	{
+		if( !vr_cam_have || v[i] < vr_cam_min[i] ) vr_cam_min[i] = v[i];
+		if( !vr_cam_have || v[i] > vr_cam_max[i] ) vr_cam_max[i] = v[i];
+	}
+
+	vr_cam_have = true;
+}
+
 qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 {
 	const TrackedDevicePose_t *hmd;
@@ -1068,6 +1093,9 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 
 		VR_InputPoll( rel, pitch, crouch );
 	}
+
+	if( vr_debug.value )
+		VR_TrackCamera( game );
 
 	VR_UpdateHands( game );
 	VR_PublishAim( game );
@@ -1888,5 +1916,14 @@ void VR_FinishFrame( void )
 			vr.head_pos[0], vr.head_pos[1], vr.head_pos[2], vr_worldscale.value, vr_fov_scale.value );
 		gEngfuncs.Con_Printf( "VR debug: weapon hook asked %d times, applied %d times (0 applied means the weapon is not drawn through the normal viewmodel path)\n", vr.vm_asked, vr.vm_applied );
 		vr.vm_asked = vr.vm_applied = 0;
+
+		if( vr_cam_have )
+		{
+			// stand still and keep your head still: these should all be (nearly) zero
+			gEngfuncs.Con_Printf( "VR debug: game camera moved in the last second: yaw %.3f, pitch %.3f, roll %.3f degrees, origin %.3f %.3f %.3f units\n",
+				vr_cam_max[1] - vr_cam_min[1], vr_cam_max[0] - vr_cam_min[0], vr_cam_max[2] - vr_cam_min[2],
+				vr_cam_max[3] - vr_cam_min[3], vr_cam_max[4] - vr_cam_min[4], vr_cam_max[5] - vr_cam_min[5] );
+			vr_cam_have = false;
+		}
 	}
 }

@@ -23,7 +23,10 @@ so text is steady and reads comfortably without being glued to your face.
 #include "openvr_capi.h"
 
 static CVAR_DEFINE_AUTO( vr_ui_distance, "1.5", 0, "distance of the UI panel in meters" );
-static CVAR_DEFINE_AUTO( vr_ui_width, "1.8", 0, "width of the UI panel in meters" );
+static CVAR_DEFINE_AUTO( vr_ui_size, "1.3", 0, "height of the UI panel in meters. The width follows the window's aspect ratio, so the menus are the same physical size at every resolution" );
+static CVAR_DEFINE_AUTO( vr_ui_width, "0", 0, "force the UI panel width in meters (0 = automatic from vr_ui_size)" );
+static CVAR_DEFINE_AUTO( vr_ui_maxwidth, "2.6", 0, "widest the UI panel may get, in meters (very wide windows are scaled down to this)" );
+static CVAR_DEFINE_AUTO( vr_ui_pointer, "0.035", 0, "size in meters of the dot that shows where your hand points on the UI, drawn on top of everything (0 = off)" );
 static CVAR_DEFINE_AUTO( vr_ui_height, "-0.12", 0, "vertical offset of the UI panel from eye level, meters (negative = lower)" );
 static CVAR_DEFINE_AUTO( vr_ui_follow, "1", 0, "1 = panel eases over to face you when you look far away from it, 0 = fixed" );
 static CVAR_DEFINE_AUTO( vr_ui_alpha, "1.0", 0, "overall opacity of the UI panel" );
@@ -45,10 +48,25 @@ static struct
 	float			w, h;
 } ui;
 
+// the dot that shows where the hand points, a second overlay above the panel
+static struct
+{
+	VROverlayHandle_t	handle;
+	qboolean		created, failed, shown;
+	qboolean		want;
+	float			u, v;
+	GLuint			tex;
+} dot;
+
+static void VR_UIUpdatePointer( const HmdMatrix34_t *panel );
+
 void VR_UIInitCvars( void )
 {
 	gEngfuncs.Cvar_RegisterVariable( &vr_ui_distance );
+	gEngfuncs.Cvar_RegisterVariable( &vr_ui_size );
 	gEngfuncs.Cvar_RegisterVariable( &vr_ui_width );
+	gEngfuncs.Cvar_RegisterVariable( &vr_ui_maxwidth );
+	gEngfuncs.Cvar_RegisterVariable( &vr_ui_pointer );
 	gEngfuncs.Cvar_RegisterVariable( &vr_ui_height );
 	gEngfuncs.Cvar_RegisterVariable( &vr_ui_follow );
 	gEngfuncs.Cvar_RegisterVariable( &vr_ui_alpha );
@@ -83,7 +101,7 @@ static qboolean VR_UICreate( void )
 		return false;
 	}
 
-	ui.overlay->SetOverlayWidthInMeters( ui.handle, vr_ui_width.value );
+	ui.overlay->SetOverlayWidthInMeters( ui.handle, 1.8f );
 	ui.overlay->ShowOverlay( ui.handle );
 	return true;
 }
@@ -107,13 +125,106 @@ static void VR_UIEnsureTexture( int w, int h )
 	ui.tex_h = h;
 }
 
+void VR_UISetPointer( qboolean visible, float u, float v )
+{
+	dot.want = visible;
+	dot.u = u;
+	dot.v = v;
+}
+
+// a small round marker: bright centre, dark outline, see-through outside
+static void VR_UIDotTexture( void )
+{
+	byte pix[64 * 64 * 4];
+	int x, y;
+
+	for( y = 0; y < 64; y++ )
+	{
+		for( x = 0; x < 64; x++ )
+		{
+			float dx = x - 31.5f, dy = y - 31.5f, r = sqrt( dx * dx + dy * dy );
+			byte *p = &pix[( y * 64 + x ) * 4];
+
+			if( r < 7.0f ) { p[0] = 60; p[1] = 230; p[2] = 255; p[3] = 255; }
+			else if( r < 11.0f ) { p[0] = 0; p[1] = 0; p[2] = 0; p[3] = 230; }
+			else { p[0] = 0; p[1] = 0; p[2] = 0; p[3] = 0; }
+		}
+	}
+
+	pglGenTextures( 1, &dot.tex );
+	pglBindTexture( GL_TEXTURE_2D, dot.tex );
+	pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+	pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+	pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+	pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+	pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, 64, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, pix );
+	glState.currentTextures[glState.activeTMU] = -1;
+	glState.currentTexturesIndex[glState.activeTMU] = -1;
+}
+
+static void VR_UIUpdatePointer( const HmdMatrix34_t *panel )
+{
+	HmdMatrix34_t m;
+	Texture_t tex;
+	float ox, oy;
+	int i;
+
+	if( dot.failed )
+		return;
+
+	if( vr_ui_pointer.value <= 0.0f || !dot.want )
+	{
+		if( dot.shown )
+		{
+			ui.overlay->HideOverlay( dot.handle );
+			dot.shown = false;
+		}
+
+		return;
+	}
+
+	if( !dot.created )
+	{
+		if( ui.overlay->CreateOverlay( (char *)"xash3d.cof.pointer", (char *)"Cry of Fear UI pointer", &dot.handle ) != EVROverlayError_VROverlayError_None )
+		{
+			dot.failed = true;
+			return;
+		}
+
+		VR_UIDotTexture();
+		ui.overlay->SetOverlaySortOrder( dot.handle, 10 );	// above the panel
+		tex.handle = (void *)(uintptr_t)dot.tex;
+		tex.eType = (ETextureType)1;
+		tex.eColorSpace = (EColorSpace)1;
+		ui.overlay->SetOverlayTexture( dot.handle, &tex );
+		dot.created = true;
+	}
+
+	// on the panel where the ray hits, a little toward the viewer so it never sinks into the panel
+	ox = ( dot.u - 0.5f ) * ui.w;
+	oy = ( dot.v - 0.5f ) * ui.h;
+	m = *panel;
+
+	for( i = 0; i < 3; i++ )
+		m.m[i][3] = panel->m[i][3] + panel->m[i][0] * ox + panel->m[i][1] * oy + panel->m[i][2] * 0.012f;
+
+	ui.overlay->SetOverlayWidthInMeters( dot.handle, vr_ui_pointer.value );
+	ui.overlay->SetOverlayTransformAbsolute( dot.handle, (ETrackingUniverseOrigin)1, &m );
+
+	if( !dot.shown )
+	{
+		ui.overlay->ShowOverlay( dot.handle );
+		dot.shown = true;
+	}
+}
+
 // called at the very start of R_EndFrame, before the frame is presented
 void VR_UIUpdate( void )
 {
 	float m[3][4];
 	HmdMatrix34_t panel;
 	Texture_t tex;
-	float fx, fz, len, head_yaw, diff, dist, zx, zz;
+	float fx, fz, len, head_yaw, diff, dist, zx, zz, pw, ph;
 	int w = gpGlobals->width, h = gpGlobals->height;
 
 	if( ui.failed || !VR_IsActive( ))
@@ -161,6 +272,25 @@ void VR_UIUpdate( void )
 			ui.panel_yaw = VR_WrapPi( ui.panel_yaw + diff * 0.06f );
 	}
 
+	// the menus are laid out relative to the window height, so the panel height is what stays fixed
+	ph = vr_ui_size.value;
+
+	if( vr_ui_width.value > 0.0f )
+	{
+		pw = vr_ui_width.value;
+		ph = pw * (float)h / (float)w;
+	}
+	else
+	{
+		pw = ph * (float)w / (float)h;
+	}
+
+	if( pw > vr_ui_maxwidth.value )
+	{
+		ph *= vr_ui_maxwidth.value / pw;
+		pw = vr_ui_maxwidth.value;
+	}
+
 	dist = vr_ui_distance.value;
 
 	// panel faces the viewer: its +Z axis points back at the head
@@ -174,18 +304,20 @@ void VR_UIUpdate( void )
 	ui.center[0] = panel.m[0][3]; ui.center[1] = panel.m[1][3]; ui.center[2] = panel.m[2][3];
 	ui.right[0] = panel.m[0][0]; ui.right[1] = panel.m[1][0]; ui.right[2] = panel.m[2][0];
 	ui.normal[0] = panel.m[0][2]; ui.normal[1] = panel.m[1][2]; ui.normal[2] = panel.m[2][2];
-	ui.w = vr_ui_width.value;
-	ui.h = vr_ui_width.value * (float)h / (float)w;
+	ui.w = pw;
+	ui.h = ph;
 	ui.valid = true;
 
 	tex.handle = (void *)(uintptr_t)ui.tex;
 	tex.eType = (ETextureType)1;		// OpenGL
 	tex.eColorSpace = (EColorSpace)1;	// gamma
 
-	ui.overlay->SetOverlayWidthInMeters( ui.handle, vr_ui_width.value );
+	ui.overlay->SetOverlayWidthInMeters( ui.handle, pw );
 	ui.overlay->SetOverlayAlpha( ui.handle, vr_ui_alpha.value );
 	ui.overlay->SetOverlayTransformAbsolute( ui.handle, (ETrackingUniverseOrigin)1, &panel );
 	ui.overlay->SetOverlayTexture( ui.handle, &tex );
+
+	VR_UIUpdatePointer( &panel );
 }
 
 /*

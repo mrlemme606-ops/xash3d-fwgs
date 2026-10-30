@@ -41,6 +41,7 @@ void *VR_GetInterface( const char *fntable_name );
 void VR_GetHeadMatrix( float m[3][4] );
 void VR_UIUpdate( void );
 void VR_UIInitCvars( void );
+void VR_UISetPointer( qboolean visible, float u, float v );
 qboolean VR_UIRayHit( const float origin[3], const float dir[3], float *u, float *v, float *dist );
 qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles );
 
