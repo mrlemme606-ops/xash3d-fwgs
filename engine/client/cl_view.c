@@ -151,6 +151,10 @@ static void V_SetRefParams( ref_params_t *fd )
 	else fd->viewsize = 120.0f;
 
 	VectorCopy( cl.punchangle, fd->punchangle );
+
+	// VR: view kicks (melee, hits, recoil) turn the whole world around you
+	if( Cvar_VariableValue( "vr_in_active" ) > 0.0f && Cvar_VariableValue( "vr_shake" ) <= 0.0f )
+		VectorClear( fd->punchangle );
 	fd->maxclients = cl.maxclients;
 	fd->viewentity = cl.viewentity;
 	fd->playernum = cl.playernum;

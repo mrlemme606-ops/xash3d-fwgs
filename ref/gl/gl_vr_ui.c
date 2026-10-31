@@ -21,6 +21,10 @@ so text is steady and reads comfortably without being glued to your face.
 #define GL_COLOR_CLEAR_VALUE	0x0C22
 #endif
 
+#ifndef GL_SCISSOR_BOX
+#define GL_SCISSOR_BOX		0x0C10
+#endif
+
 #define OPENVR_API_NODLL
 #include <stdint.h>
 #include <stdbool.h>
@@ -30,12 +34,13 @@ static CVAR_DEFINE_AUTO( vr_ui_distance, "1.5", 0, "distance of the UI panel in 
 static CVAR_DEFINE_AUTO( vr_ui_size, "1.3", 0, "height of the UI panel in meters. The width follows the window's aspect ratio, so the menus are the same physical size at every resolution" );
 static CVAR_DEFINE_AUTO( vr_ui_width, "0", 0, "force the UI panel width in meters (0 = automatic from vr_ui_size)" );
 static CVAR_DEFINE_AUTO( vr_ui_maxwidth, "2.6", 0, "widest the UI panel may get, in meters (very wide windows are scaled down to this)" );
-static CVAR_DEFINE_AUTO( vr_hud_hand, "1", FCVAR_ARCHIVE, "1 = the HUD (health, ammo...) is shown on the back of your right hand instead of the floating panel" );
-static CVAR_DEFINE_AUTO( vr_hud_width, "0.30", FCVAR_ARCHIVE, "width in meters of the HUD on your hand" );
-static CVAR_DEFINE_AUTO( vr_hud_crop, "0 0 1 0.25", FCVAR_ARCHIVE, "part of the screen the hand HUD shows, as: left bottom right top (0 to 1, from the bottom left). Needs quotes. Default is the bottom quarter" );
+static CVAR_DEFINE_AUTO( vr_hud_hand, "0", FCVAR_ARCHIVE, "1 = two strips of the HUD (health/stamina and ammo, see vr_hud_band, vr_hud_x1, vr_hud_x2) are shown on the back of your right hand instead of the floating panel. Everything else stays on the panel" );
+static CVAR_DEFINE_AUTO( vr_hud_width, "0.22", FCVAR_ARCHIVE, "width in meters of the HUD on your hand" );
+static CVAR_DEFINE_AUTO( vr_hud_band, "0 0.14", FCVAR_ARCHIVE, "height of the strips taken from the HUD, as: bottom top (0 to 1 of the screen height, from the bottom). Needs quotes" );
+static CVAR_DEFINE_AUTO( vr_hud_x1, "0 0.30", FCVAR_ARCHIVE, "first strip (health, stamina), as: left right (0 to 1 of the screen width). Needs quotes" );
+static CVAR_DEFINE_AUTO( vr_hud_x2, "0.78 1", FCVAR_ARCHIVE, "second strip (ammo), as: left right. Set to \"0 0\" for no second strip" );
 static CVAR_DEFINE_AUTO( vr_hud_pos, "0 0.045 0.06", FCVAR_ARCHIVE, "where the HUD sits on the controller, as: x y z in meters (y = up, z = toward your wrist). Needs quotes" );
 static CVAR_DEFINE_AUTO( vr_hud_tilt, "0", FCVAR_ARCHIVE, "tilt of the hand HUD around the controller's side axis, in degrees" );
-static CVAR_DEFINE_AUTO( vr_hud_flipv, "0", FCVAR_ARCHIVE, "set to 1 if the hand HUD shows the top of the screen instead of the bottom" );
 static CVAR_DEFINE_AUTO( vr_hud_alpha, "1.0", FCVAR_ARCHIVE, "opacity of the hand HUD when you look at it" );
 static CVAR_DEFINE_AUTO( vr_ui_pointer, "0.035", 0, "size in meters of the dot that shows where your hand points on the UI, drawn on top of everything (0 = off)" );
 static CVAR_DEFINE_AUTO( vr_ui_height, "-0.12", 0, "vertical offset of the UI panel from eye level, meters (negative = lower)" );
@@ -91,10 +96,11 @@ void VR_UIInitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_ui_pointer );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hud_hand );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hud_width );
-	gEngfuncs.Cvar_RegisterVariable( &vr_hud_crop );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hud_band );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hud_x1 );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hud_x2 );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hud_pos );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hud_tilt );
-	gEngfuncs.Cvar_RegisterVariable( &vr_hud_flipv );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hud_alpha );
 	gEngfuncs.Cvar_RegisterVariable( &vr_ui_height );
 	gEngfuncs.Cvar_RegisterVariable( &vr_ui_follow );
@@ -154,63 +160,6 @@ static void VR_UIEnsureTexture( int w, int h )
 	ui.tex_h = h;
 }
 
-/*
-=================
-Called by the renderer right after the HUD is drawn into the window and before the menus.
-The window is copied (it holds only the HUD, the world went to the eye images) and then cleared,
-so the menus that follow get a clean panel.
-=================
-*/
-void VR_HUDCapture( void )
-{
-	int w = gpGlobals->width, h = gpGlobals->height;
-	GLfloat clear[4];
-	GLboolean scissor;
-
-	hud.have = false;
-
-	if( !vr_hud_hand.value || ui.failed || hud.failed || !VR_IsActive( ) || !VR_FrameDone( ))
-		return;
-
-	if( !hud.tex || hud.tex_w != w || hud.tex_h != h )
-	{
-		if( hud.tex )
-			pglDeleteTextures( 1, &hud.tex );
-
-		pglGenTextures( 1, &hud.tex );
-		pglBindTexture( GL_TEXTURE_2D, hud.tex );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-		pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
-		hud.tex_w = w;
-		hud.tex_h = h;
-	}
-
-	pglBindTexture( GL_TEXTURE_2D, hud.tex );
-	pglCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h );
-	glState.currentTextures[glState.activeTMU] = -1;
-	glState.currentTexturesIndex[glState.activeTMU] = -1;
-
-	// the HUD is on its way to the hand, wipe it from the window
-	scissor = pglIsEnabled( GL_SCISSOR_TEST );
-	pglGetFloatv( GL_COLOR_CLEAR_VALUE, clear );
-
-	if( scissor )
-		pglDisable( GL_SCISSOR_TEST );
-
-	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
-	pglClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
-	pglClear( GL_COLOR_BUFFER_BIT );
-	pglClearColor( clear[0], clear[1], clear[2], clear[3] );
-
-	if( scissor )
-		pglEnable( GL_SCISSOR_TEST );
-
-	hud.have = true;
-}
-
 // "0.5 1 2" -> 0.5, 1, 2 (what is missing keeps its default)
 static void VR_ParseFloats( const char *str, float *out, int count )
 {
@@ -229,6 +178,116 @@ static void VR_ParseFloats( const char *str, float *out, int count )
 	}
 }
 
+// the two strips of the screen that go to the hand, in pixels: x, y, width, height (width 0 = not used)
+static void VR_HUDRects( int w, int h, int rect[2][4] )
+{
+	float band[2] = { 0.0f, 0.14f }, xs[2][2] = { { 0.0f, 0.30f }, { 0.78f, 1.0f } };
+	int i;
+
+	VR_ParseFloats( vr_hud_band.string, band, 2 );
+	VR_ParseFloats( vr_hud_x1.string, xs[0], 2 );
+	VR_ParseFloats( vr_hud_x2.string, xs[1], 2 );
+
+	band[0] = bound( 0.0f, band[0], 0.95f );
+	band[1] = bound( band[0] + 0.02f, band[1], 1.0f );
+
+	for( i = 0; i < 2; i++ )
+	{
+		float l = bound( 0.0f, xs[i][0], 1.0f ), r = bound( l, xs[i][1], 1.0f );
+
+		rect[i][0] = (int)( l * w );
+		rect[i][1] = (int)( band[0] * h );
+		rect[i][2] = (int)(( r - l ) * w );
+		rect[i][3] = (int)(( band[1] - band[0] ) * h );
+
+		if( rect[i][2] < 4 )
+			rect[i][2] = 0;
+	}
+}
+
+/*
+=================
+Called by the renderer right after the in-game HUD is drawn and before the menus.
+Cry of Fear draws its inventory, menus and subtitles through the same path as the HUD, so only
+the strips that hold health, stamina and ammo are taken out of the window (copied side by side
+into one small texture, then wiped from the window). Everything else stays on the panel.
+=================
+*/
+void VR_HUDCapture( void )
+{
+	int w = gpGlobals->width, h = gpGlobals->height, rect[2][4], i, xoff = 0, tw, th;
+	GLint scissor_box[4];
+	GLfloat clear[4];
+	GLboolean scissor;
+
+	hud.have = false;
+
+	if( !vr_hud_hand.value || ui.failed || hud.failed || !VR_IsActive( ) || !VR_FrameDone( ))
+		return;
+
+	VR_HUDRects( w, h, rect );
+	th = rect[0][3];
+	tw = rect[0][2] + rect[1][2];
+
+	if( tw < 8 || th < 4 )
+		return;
+
+	if( !hud.tex || hud.tex_w != tw || hud.tex_h != th )
+	{
+		if( hud.tex )
+			pglDeleteTextures( 1, &hud.tex );
+
+		pglGenTextures( 1, &hud.tex );
+		pglBindTexture( GL_TEXTURE_2D, hud.tex );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+		pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, tw, th, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
+		hud.tex_w = tw;
+		hud.tex_h = th;
+	}
+
+	pglBindTexture( GL_TEXTURE_2D, hud.tex );
+
+	for( i = 0; i < 2; i++ )
+	{
+		if( !rect[i][2] )
+			continue;
+
+		pglCopyTexSubImage2D( GL_TEXTURE_2D, 0, xoff, 0, rect[i][0], rect[i][1], rect[i][2], rect[i][3] );
+		xoff += rect[i][2];
+	}
+
+	glState.currentTextures[glState.activeTMU] = -1;
+	glState.currentTexturesIndex[glState.activeTMU] = -1;
+
+	// wipe just those strips from the window
+	scissor = pglIsEnabled( GL_SCISSOR_TEST );
+	pglGetIntegerv( GL_SCISSOR_BOX, scissor_box );
+	pglGetFloatv( GL_COLOR_CLEAR_VALUE, clear );
+	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+	pglClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
+	pglEnable( GL_SCISSOR_TEST );
+
+	for( i = 0; i < 2; i++ )
+	{
+		if( !rect[i][2] )
+			continue;
+
+		pglScissor( rect[i][0], rect[i][1], rect[i][2], rect[i][3] );
+		pglClear( GL_COLOR_BUFFER_BIT );
+	}
+
+	pglScissor( scissor_box[0], scissor_box[1], scissor_box[2], scissor_box[3] );
+
+	if( !scissor )
+		pglDisable( GL_SCISSOR_TEST );
+
+	pglClearColor( clear[0], clear[1], clear[2], clear[3] );
+	hud.have = true;
+}
+
 static void VR_UIHideHUD( void )
 {
 	if( hud.shown )
@@ -240,10 +299,9 @@ static void VR_UIHideHUD( void )
 
 static void VR_UIUpdateHUD( void )
 {
-	float c[4] = { 0.0f, 0.0f, 1.0f, 0.25f }, pos[3] = { 0.0f, 0.045f, 0.06f };
-	float cm[3][4], hm[3][4], n[3], p[3], to[3], len, facing, alpha, cs, sn, width, height;
+	float pos[3] = { 0.0f, 0.045f, 0.06f };
+	float cm[3][4], hm[3][4], n[3], p[3], to[3], len, facing, alpha, cs, sn;
 	HmdMatrix34_t rel;
-	VRTextureBounds_t bounds;
 	Texture_t tex;
 	uint32_t dev = 0;
 	int i;
@@ -268,17 +326,7 @@ static void VR_UIUpdateHUD( void )
 		hud.created = true;
 	}
 
-	VR_ParseFloats( vr_hud_crop.string, c, 4 );
 	VR_ParseFloats( vr_hud_pos.string, pos, 3 );
-	c[0] = bound( 0.0f, c[0], 0.99f );
-	c[1] = bound( 0.0f, c[1], 0.99f );
-	c[2] = bound( c[0] + 0.01f, c[2], 1.0f );
-	c[3] = bound( c[1] + 0.01f, c[3], 1.0f );
-
-	bounds.uMin = c[0];
-	bounds.uMax = c[2];
-	bounds.vMin = vr_hud_flipv.value ? 1.0f - c[3] : c[1];
-	bounds.vMax = vr_hud_flipv.value ? 1.0f - c[1] : c[3];
 
 	// the HUD lies on the back of the hand, facing up and toward you. Controller axes: x right, y up, z toward the wrist
 	cs = cos( DEG2RAD( vr_hud_tilt.value ));
@@ -308,19 +356,14 @@ static void VR_UIUpdateHUD( void )
 		return;
 	}
 
-	width = vr_hud_width.value;
-	height = width * (( c[3] - c[1] ) * (float)hud.tex_h ) / (( c[2] - c[0] ) * (float)hud.tex_w );
-
 	tex.handle = (void *)(uintptr_t)hud.tex;
 	tex.eType = (ETextureType)1;
 	tex.eColorSpace = (EColorSpace)1;
 
-	ui.overlay->SetOverlayWidthInMeters( hud.handle, width );
-	ui.overlay->SetOverlayTextureBounds( hud.handle, &bounds );
+	ui.overlay->SetOverlayWidthInMeters( hud.handle, vr_hud_width.value );
 	ui.overlay->SetOverlayAlpha( hud.handle, alpha );
 	ui.overlay->SetOverlayTransformTrackedDeviceRelative( hud.handle, dev, &rel );
 	ui.overlay->SetOverlayTexture( hud.handle, &tex );
-	(void)height;
 
 	if( !hud.shown )
 	{

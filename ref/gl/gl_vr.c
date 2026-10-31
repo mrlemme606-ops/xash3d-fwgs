@@ -151,11 +151,29 @@ static CVAR_DEFINE_AUTO( vr_aim_debug, "0", 0, "print what the aim trace is doin
 static CVAR_DEFINE_AUTO( vr_vm_hide_bones, "^l_", FCVAR_ARCHIVE, "parts of the weapon model attached to bones whose name starts with (^) or contains one of these are not drawn (the left arm). Separate with +. vr_vm_dump_tex 2 lists the bones" );
 static CVAR_DEFINE_AUTO( vr_vm_cap_radius, "0", FCVAR_ARCHIVE, "size of the disc that closes the cut-off arm at the wrist (0 = none)" );
 static CVAR_DEFINE_AUTO( vr_vm_cap_gray, "0.1", FCVAR_ARCHIVE, "brightness of that disc, 0 = black, 1 = white" );
-static CVAR_DEFINE_AUTO( vr_static_models, "phone+cell+mobile+flash+syringe+flare", 0, "weapon model names (part of the file name) whose animations never play, the model stays in one pose in your hand. Separate with +" );
-static CVAR_DEFINE_AUTO( vr_melee_models, "fist+knife+switchblade+branch+nightstick+crowbar+pipe+axe+hammer+bat", 0, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_static_models, "mobile+flashlight+flare+lantern+syringe+camera+radio", 0, "weapon model names (part of the file name) whose animations never play, the model stays in one pose in your hand. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_melee_models, "fist+axe+branch+nightstick+sledge+pickaxe+shovel+switchblade", 0, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
 static CVAR_DEFINE_AUTO( vr_melee_reach, "64", FCVAR_ARCHIVE, "how far in front of your swinging hand the game looks for something to hit, in units" );
+static CVAR_DEFINE_AUTO( vr_omni_models, "flare+lantern", 0, "weapon model names that light up everything around your hand (flare, lantern). Separate with +" );
+static CVAR_DEFINE_AUTO( vr_omni_radius, "260", FCVAR_ARCHIVE, "size of the light around a flare or lantern, in units" );
+static CVAR_DEFINE_AUTO( vr_lhand, "1", FCVAR_ARCHIVE, "1 = a left hand is drawn at your left controller" );
+static CVAR_DEFINE_AUTO( vr_lhand_model, "models/weapons/switchblade/v_switchblade.mdl", 0, "weapon model whose left arm is used as the left hand" );
+static CVAR_DEFINE_AUTO( vr_lhand_hide_bones, "^r_+grippity+blade", 0, "parts of the left hand model that are not drawn (the right arm and the weapon). Separate with +" );
+static CVAR_DEFINE_AUTO( vr_lh_grip_x, "13", FCVAR_ARCHIVE, "left hand position on the controller: forward" );
+static CVAR_DEFINE_AUTO( vr_lh_grip_y, "4", FCVAR_ARCHIVE, "left hand position on the controller: left (negative = right)" );
+static CVAR_DEFINE_AUTO( vr_lh_grip_z, "-3", FCVAR_ARCHIVE, "left hand position on the controller: up" );
+static CVAR_DEFINE_AUTO( vr_lh_pitch, "0", FCVAR_ARCHIVE, "left hand rotation: pitch degrees" );
+static CVAR_DEFINE_AUTO( vr_lh_yaw, "0", FCVAR_ARCHIVE, "left hand rotation: yaw degrees" );
+static CVAR_DEFINE_AUTO( vr_lh_roll, "0", FCVAR_ARCHIVE, "left hand rotation: roll degrees" );
+static CVAR_DEFINE_AUTO( vr_lh_flip_roll, "0", FCVAR_ARCHIVE, "set to 1 if the left hand is rolled the wrong way" );
+static CVAR_DEFINE_AUTO( vr_lh_scale, "0.5", FCVAR_ARCHIVE, "size of the left hand" );
+static CVAR_DEFINE_AUTO( vr_lh_arm_cut, "2", FCVAR_ARCHIVE, "where the left arm is cut off, in units behind the hand" );
+static CVAR_DEFINE_AUTO( vr_lh_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the left arm cut: pitch degrees" );
+static CVAR_DEFINE_AUTO( vr_lh_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the left arm cut: yaw degrees" );
+static CVAR_DEFINE_AUTO( vr_vm_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the weapon hand's arm cut: pitch degrees (saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_vm_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the weapon hand's arm cut: yaw degrees (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_phone_light, "1", FCVAR_ARCHIVE, "1 = a spotlight shines from the weapons listed in vr_light_models, where your hand points" );
-static CVAR_DEFINE_AUTO( vr_light_models, "phone+cell+mobile+flash", 0, "weapon model names (part of the file name) that work as a flashlight. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_light_models, "mobile+flashlight", 0, "weapon model names (part of the file name) that work as a flashlight. Separate with +" );
 static CVAR_DEFINE_AUTO( vr_light_distance, "700", FCVAR_ARCHIVE, "how far the flashlight reaches, in units" );
 static CVAR_DEFINE_AUTO( vr_light_radius, "150", FCVAR_ARCHIVE, "size of the lit area, in units" );
 static CVAR_DEFINE_AUTO( vr_light_brightness, "200", FCVAR_ARCHIVE, "brightness of the flashlight, 0 to 255" );
@@ -281,6 +299,8 @@ static void VR_Recenter_f( void )
 	gEngfuncs.Con_Printf( "VR: recentering on next frame\n" );
 }
 
+static void VR_SkyInfo_f( void );
+
 static void VR_VisualsOff_f( void )
 {
 	gEngfuncs.Cvar_SetValue( "vr_draw_axes", 0.0f );
@@ -328,6 +348,25 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_lock_frame );
 	gEngfuncs.Cmd_AddCommand( "vr_vm_seqlist", VR_DumpSequences, "list the animation sequences of the weapon you hold" );
 	gEngfuncs.Cvar_RegisterVariable( &vr_phone_light );
+	gEngfuncs.Cvar_RegisterVariable( &vr_omni_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_omni_radius );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lhand );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lhand_model );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lhand_hide_bones );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_grip_x );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_grip_y );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_grip_z );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_pitch );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_yaw );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_roll );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_flip_roll );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_scale );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_arm_cut );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_cut_pitch );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_cut_yaw );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_cut_pitch );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_cut_yaw );
+	gEngfuncs.Cmd_AddCommand( "vr_skyinfo", VR_SkyInfo_f, "print the sky the map asks for and any sky model entities, to work out how the map draws its sky" );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_distance );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_radius );
@@ -539,6 +578,7 @@ static void VR_UpdateHands( const ref_viewpass_t *game )
 
 static vec3_t vr_aim_target;
 static qboolean vr_aim_hit;	// the hand ray hit something, vr_aim_target is that point
+static qboolean vr_vm_omni, vr_vm_flare;	// flare or lantern in hand
 static qboolean vr_vm_static;	// the weapon in hand never animates (phone, syringe)
 static qboolean vr_vm_light;	// the weapon in hand is a flashlight (the phone)
 static qboolean vr_vm_melee;	// the weapon in hand is swung by hand
@@ -631,6 +671,15 @@ static void VR_PublishAim( const ref_viewpass_t *game )
 	gEngfuncs.Cvar_SetValue( "vr_in_hand_pitch", pitch );
 	gEngfuncs.Cvar_SetValue( "vr_in_hand_yaw", yaw );
 	gEngfuncs.Cvar_SetValue( "vr_in_hand_valid", 1.0f );
+
+	// the plain direction the hand points, used by the use key
+	{
+		float dpitch, dyaw;
+
+		VR_AimAngles( vec3_origin, vr.hand[1].fwd, game->viewangles[YAW], &dpitch, &dyaw );
+		gEngfuncs.Cvar_SetValue( "vr_in_dir_pitch", dpitch );
+		gEngfuncs.Cvar_SetValue( "vr_in_dir_yaw", dyaw );
+	}
 
 	// for the flashlight, which lives in the engine
 	gEngfuncs.Cvar_SetValue( "vr_in_ray_x", vr.hand[1].pos[0] );
@@ -803,6 +852,8 @@ static qboolean VR_ListMatches( const char *list, const char *name, qboolean spl
 	return false;
 }
 
+static qboolean vr_left_pass;	// the universal left hand is being drawn
+
 // called by the studio renderer for every mesh of the weapon model while it is drawn at the hand
 int VR_ViewModelMeshMode( int mesh, const char *texname )
 {
@@ -826,17 +877,26 @@ int VR_ViewModelMeshMode( int mesh, const char *texname )
 void VR_ViewModelClip( qboolean on )
 {
 	GLdouble eq[4];
-	float view[16];
-	vec3_t n, c;
+	float view[16], cut, cp, cy;
+	vec3_t n, c, t;
+	int hnd = vr_left_pass ? 0 : 1;
 
-	if( !on || !vr.hand[1].valid )
+	if( !on || !vr.hand[hnd].valid )
 	{
 		pglDisable( GL_CLIP_PLANE0 );
 		return;
 	}
 
-	VectorCopy( vr.hand[1].fwd, n );
-	VectorMA( vr.hand[1].pos, -vr_vm_arm_cut.value, n, c );
+	cut = vr_left_pass ? vr_lh_arm_cut.value : vr_vm_arm_cut.value;
+	cp = DEG2RAD( vr_left_pass ? vr_lh_cut_pitch.value : vr_vm_cut_pitch.value );
+	cy = DEG2RAD( vr_left_pass ? vr_lh_cut_yaw.value : vr_vm_cut_yaw.value );
+
+	// the cut plane faces along the hand, tilted by yaw (toward the left) and pitch (toward up)
+	VectorScale( vr.hand[hnd].fwd, cos( cy ), t );
+	VectorMA( t, sin( cy ), vr.hand[hnd].left, t );
+	VectorScale( t, cos( cp ), n );
+	VectorMA( n, sin( cp ), vr.hand[hnd].up, n );
+	VectorMA( vr.hand[hnd].pos, -cut, n, c );
 
 	eq[0] = n[0];
 	eq[1] = n[1];
@@ -863,9 +923,54 @@ qboolean VR_WantBoneDump( void )
 	return true;
 }
 
+void VR_SetHandPass( qboolean left )
+{
+	vr_left_pass = left;
+}
+
 qboolean VR_ViewModelBoneHidden( const char *bonename )
 {
-	return VR_ListMatches( vr_vm_hide_bones.string, bonename, false );
+	return VR_ListMatches( vr_left_pass ? vr_lhand_hide_bones.string : vr_vm_hide_bones.string, bonename, false );
+}
+
+const char *VR_LeftHandModel( void )
+{
+	return vr_lhand_model.string;
+}
+
+float VR_GetLeftHandScale( void )
+{
+	return bound( 0.1f, vr_lh_scale.value, 4.0f );
+}
+
+// the universal left hand: the left arm of a viewmodel, at the left controller
+qboolean VR_GetLeftHandPose( vec3_t origin, vec3_t angles )
+{
+	vec3_t shift;
+	float xy, pitch, yaw, roll;
+
+	if( !vr_lhand.value || !vr.in_eye_pass || !vr.hand[0].valid )
+		return false;
+
+	VectorScale( vr.hand[0].fwd, vr_lh_grip_x.value, shift );
+	VectorSubtract( vr.hand[0].pos, shift, origin );
+	VectorScale( vr.hand[0].left, vr_lh_grip_y.value, shift );
+	VectorSubtract( origin, shift, origin );
+	VectorScale( vr.hand[0].up, vr_lh_grip_z.value, shift );
+	VectorSubtract( origin, shift, origin );
+
+	xy = sqrt( vr.hand[0].fwd[0] * vr.hand[0].fwd[0] + vr.hand[0].fwd[1] * vr.hand[0].fwd[1] );
+	pitch = RAD2DEG( atan2( -vr.hand[0].fwd[2], xy ));
+	yaw = RAD2DEG( atan2( vr.hand[0].fwd[1], vr.hand[0].fwd[0] ));
+	roll = RAD2DEG( atan2( vr.hand[0].left[2], vr.hand[0].up[2] ));
+
+	if( vr_lh_flip_roll.value )
+		roll = -roll;
+
+	angles[PITCH] = -( pitch + vr_lh_pitch.value );
+	angles[YAW] = yaw + vr_lh_yaw.value;
+	angles[ROLL] = roll + vr_lh_roll.value;
+	return true;
 }
 
 qboolean VR_ViewModelFrozen( void )
@@ -998,7 +1103,7 @@ When you switch weapons they are restored, then vr_weapon_<model>.cfg is run if 
 static convar_t *vr_tune_vars[] =
 {
 	&vr_vm_grip_x, &vr_vm_grip_y, &vr_vm_grip_z, &vr_vm_pitch, &vr_vm_yaw,
-	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut
+	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut, &vr_vm_cut_pitch, &vr_vm_cut_yaw
 };
 
 #define VR_TUNE_COUNT ( (int)( sizeof( vr_tune_vars ) / sizeof( vr_tune_vars[0] )))
@@ -1070,6 +1175,8 @@ static void VR_UpdateWeaponProfile( void )
 		vr_vm_melee = VR_ListMatches( vr_melee_models.string, base, true );
 		vr_vm_light = VR_ListMatches( vr_light_models.string, base, true );
 		vr_vm_static = VR_ListMatches( vr_static_models.string, base, true );
+		vr_vm_omni = VR_ListMatches( vr_omni_models.string, base, true );
+		vr_vm_flare = VR_ContainsNoCase( base, "flare" );
 		gEngfuncs.Cvar_SetValue( "vr_in_melee", vr_vm_melee ? 1.0f : 0.0f );
 	}
 
@@ -1123,6 +1230,34 @@ static void VR_TrackCamera( const ref_viewpass_t *game )
 	vr_cam_have = true;
 }
 
+// vr_skyinfo: which sky does the map ask for, and which sky models are in the scene?
+static void VR_SkyInfo_f( void )
+{
+	int i, n, count = 0;
+
+	gEngfuncs.Con_Printf( "sky texture asked for by the map: '%s'\n", gp_movevars->skyName );
+
+	if( !tr.draw_list )
+		return;
+
+	n = tr.draw_list->num_solid_entities + tr.draw_list->num_trans_entities;
+
+	for( i = 0; i < n; i++ )
+	{
+		cl_entity_t *e = i < tr.draw_list->num_solid_entities ? tr.draw_list->solid_entities[i]
+			: tr.draw_list->trans_entities[i - tr.draw_list->num_solid_entities];
+
+		if( !e || !e->model || !VR_ContainsNoCase( e->model->name, "sky" ))
+			continue;
+
+		count++;
+		gEngfuncs.Con_Printf( "  %s: ent %d, origin %.0f %.0f %.0f, rendermode %d, renderfx %d, renderamt %d, scale %.2f\n", e->model->name, e->index,
+			e->origin[0], e->origin[1], e->origin[2], e->curstate.rendermode, e->curstate.renderfx, e->curstate.renderamt, e->curstate.scale );
+	}
+
+	gEngfuncs.Con_Printf( "%d sky model entities in the scene (of %d)\n", count, n );
+}
+
 #define VR_LIGHT_KEY	0x5652	// so we always reuse the same dynamic light
 
 static dlight_t *VR_AllocLight( void )
@@ -1154,8 +1289,25 @@ static void VR_UpdateHandLight( const ref_viewpass_t *game )
 	float dist, bright;
 	qboolean hit;
 
-	if( !vr_phone_light.value || !vr_vm_light || !vr.hand[1].valid )
+	if( !vr_phone_light.value || !vr.hand[1].valid || ( !vr_vm_light && !vr_vm_omni ))
 		return;
+
+	if( vr_vm_omni )
+	{
+		// flare or lantern: light all around the hand
+		VectorMA( vr.hand[1].pos, 6.0f, vr.hand[1].fwd, org );
+
+		if( !( dl = VR_AllocLight( )))
+			return;
+
+		VectorCopy( org, dl->origin );
+		dl->radius = vr_omni_radius.value;
+		dl->color.r = vr_vm_flare ? 255 : 255;
+		dl->color.g = vr_vm_flare ? 70 : 190;
+		dl->color.b = vr_vm_flare ? 40 : 110;
+		dl->die = gp_cl->time + 0.05f;
+		return;
+	}
 
 	hit = VR_TraceRay( vr.hand[1].pos, vr.hand[1].fwd, vr_light_distance.value, game->vieworigin, end );
 

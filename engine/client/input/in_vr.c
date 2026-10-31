@@ -47,6 +47,8 @@ static CVAR_DEFINE_AUTO( vr_in_ray_dz, "0", 0, "(internal) direction the right h
 static CVAR_DEFINE_AUTO( vr_in_whip, "0", 0, "(internal) pistol whipping right now" );
 static CVAR_DEFINE_AUTO( vr_in_menu, "1", 0, "(internal) a menu or the console is open" );
 static CVAR_DEFINE_AUTO( vr_shake, "0", FCVAR_ARCHIVE, "1 = the game may shake the camera (explosions, hits). Off is much easier on the stomach in VR" );
+static CVAR_DEFINE_AUTO( vr_in_dir_yaw, "0", 0, "(internal) yaw of the direction the right hand points, relative to the body" );
+static CVAR_DEFINE_AUTO( vr_in_dir_pitch, "0", 0, "(internal) pitch of the direction the right hand points" );
 static CVAR_DEFINE_AUTO( vr_in_crouch, "0", 0, "(internal) physically crouching" );
 static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
 
@@ -56,7 +58,7 @@ static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
 static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = body (mouse), 1 = head, 2 = right hand while you use/shoot and head otherwise (default), 3 = right hand always" );
 static CVAR_DEFINE_AUTO( vr_move_digital, "1", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
-static CVAR_DEFINE_AUTO( vr_use_aim_hand, "0", FCVAR_ARCHIVE, "1 = the use key (right grip) aims along your hand, 0 = along your head (doors open when you look at them)" );
+static CVAR_DEFINE_AUTO( vr_use_aim, "2", FCVAR_ARCHIVE, "what the use key (right grip) aims along: 0 = your head, 1 = the exact point your hand ray hits, 2 = the direction your hand points" );
 static CVAR_DEFINE_AUTO( vr_melee_enable, "1", FCVAR_ARCHIVE, "1 = swinging your hand fast with a melee weapon attacks" );
 static CVAR_DEFINE_AUTO( vr_melee_speed, "2.0", FCVAR_ARCHIVE, "hand speed in m/s that counts as a swing" );
 static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.1", FCVAR_ARCHIVE, "seconds between two swings (a swing has to slow down before the next one counts anyway)" );
@@ -66,7 +68,7 @@ static CVAR_DEFINE_AUTO( vr_debug_move, "0", 0, "print the player's movement typ
 
 // which key each controller button presses. single character, or mouse1/2/3, space, ctrl, shift, enter, tab, escape. empty = nothing
 static CVAR_DEFINE_AUTO( vr_key_rtrigger, "mouse1", FCVAR_ARCHIVE, "key for right trigger" );
-static CVAR_DEFINE_AUTO( vr_key_ltrigger, "mouse2", FCVAR_ARCHIVE, "key for left trigger" );
+static CVAR_DEFINE_AUTO( vr_key_ltrigger, "", FCVAR_ARCHIVE, "key for left trigger (empty = nothing)" );
 static CVAR_DEFINE_AUTO( vr_key_rgrip, "e", FCVAR_ARCHIVE, "key for right grip" );
 static CVAR_DEFINE_AUTO( vr_key_lgrip, "f", FCVAR_ARCHIVE, "key for left grip" );
 static CVAR_DEFINE_AUTO( vr_key_a, "space", FCVAR_ARCHIVE, "key for A (right controller)" );
@@ -111,6 +113,9 @@ static qboolean vr_dir_down[4];	// forward, back, left, right (with hysteresis)
 static int vr_last_movetype = -1;
 static qboolean vr_swing_armed = true;	// the hand has to slow down before the next swing counts
 static double vr_whip_until;
+static double vr_use_until;	// the use key was pressed: aim it until this time
+static double vr_lock_until;	// the body does not turn by itself until this time (melee)
+static float vr_lock_yaw;
 static double vr_swing_until;	// aim along the swing until this time
 static double vr_melee_next;	// no new swing before this time
 static float vr_swing_yaw, vr_swing_pitch;
@@ -187,7 +192,9 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_swing_pitch );
 	Cvar_RegisterVariable( &vr_in_melee );
 	Cvar_RegisterVariable( &vr_melee_enable );
-	Cvar_RegisterVariable( &vr_use_aim_hand );
+	Cvar_RegisterVariable( &vr_use_aim );
+	Cvar_RegisterVariable( &vr_in_dir_yaw );
+	Cvar_RegisterVariable( &vr_in_dir_pitch );
 	Cvar_RegisterVariable( &vr_melee_speed );
 	Cvar_RegisterVariable( &vr_melee_cooldown );
 	Cvar_RegisterVariable( &vr_in_ray_x );
@@ -352,6 +359,10 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		return;
 	}
 
+	// melee and swings must not turn you around: hold the body direction for a moment
+	if( host.realtime < vr_lock_until )
+		cl.viewangles[YAW] = vr_lock_yaw;
+
 	{
 		float whip = host.realtime < vr_whip_until ? 1.0f : 0.0f;
 
@@ -369,7 +380,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	mode = (int)vr_aim_mode.value;
 
 	// using something or shooting: aim with the hand for a moment (walking keeps following the head otherwise)
-	if( buttons & ( BIT( VRB_RTRIGGER ) | BIT( VRB_LTRIGGER ) | BIT( VRB_B ) | ( vr_use_aim_hand.value ? BIT( VRB_RGRIP ) : 0 )))
+	if( buttons & ( BIT( VRB_RTRIGGER ) | BIT( VRB_LTRIGGER ) | BIT( VRB_B )))
 		vr_hand_aim_until = host.realtime + 0.35;
 
 	// swinging a weapon by hand: a fast hand movement attacks, aimed where the hand is going
@@ -387,11 +398,22 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		vr_swing_frames = 3;
 		vr_swing_whip = vr_in_melee.value < 0.5f;
 		vr_swing_armed = false;
+		vr_lock_yaw = cl.viewangles[YAW];
+		vr_lock_until = host.realtime + 0.8;
 
 		// a gun being whipped holds still on screen for a moment
 		if( vr_swing_whip )
 			vr_whip_until = host.realtime + 0.7;
 	}
+
+	if( in_game && vr_in_melee.value > 0.5f && FBitSet( buttons & ~vr_prev_buttons, BIT( VRB_RTRIGGER )))
+	{
+		vr_lock_yaw = cl.viewangles[YAW];
+		vr_lock_until = host.realtime + 0.8;
+	}
+
+	if( buttons & BIT( VRB_RGRIP ))
+		vr_use_until = host.realtime + 0.35;
 
 	if( !in_game )
 		vr_swing_frames = 0;
@@ -407,6 +429,22 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		mode = 2;
 		aim_rel = vr_swing_yaw;
 		aim_pitch = vr_swing_pitch;
+	}
+	else if( vr_in_hand_valid.value > 0.5f && vr_use_aim.value >= 1.0f && host.realtime < vr_use_until && host.realtime >= vr_hand_aim_until )
+	{
+		// the use key (doors, items, the save cassette) aims where the hand points
+		mode = 2;
+
+		if( vr_use_aim.value >= 2.0f )
+		{
+			aim_rel = vr_in_dir_yaw.value;
+			aim_pitch = vr_in_dir_pitch.value;
+		}
+		else
+		{
+			aim_rel = vr_in_hand_yaw.value;
+			aim_pitch = vr_in_hand_pitch.value;
+		}
 	}
 	else if( vr_in_hand_valid.value > 0.5f && ( mode >= 3 || ( mode == 2 && host.realtime < vr_hand_aim_until )))
 	{
@@ -532,6 +570,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	{
 		cmd->viewangles[YAW] += yaw;
 		VectorCopy( cmd->viewangles, cl.viewangles );
+		vr_lock_yaw = cl.viewangles[YAW];
 	}
 
 	// analog walking, when the keys are not doing it

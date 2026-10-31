@@ -144,6 +144,7 @@ static float m_flGaitMovement;
 static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
 static qboolean r_vr_viewmodel;	// the weapon is being drawn at the VR hand
+static cl_entity_t vr_lhand_ent;	// the universal left hand
 
 /*
 ====================
@@ -554,6 +555,8 @@ static void R_StudioSetUpTransform( cl_entity_t *e )
 
 		if( r_vr_viewmodel && e == tr.viewent )
 			scale = VR_GetViewModelScale();
+		else if( r_vr_viewmodel && e == &vr_lhand_ent )
+			scale = VR_GetLeftHandScale();
 
 		Matrix3x4_CreateFromEntity( g_studio.rotationmatrix, angles, origin, scale );
 	}
@@ -2041,7 +2044,7 @@ static void R_StudioDrawPoints( void )
 
 	g_studio.vr_filter = false;
 
-	if( r_vr_viewmodel && RI.currententity == tr.viewent )
+	if( r_vr_viewmodel && ( RI.currententity == tr.viewent || RI.currententity == &vr_lhand_ent ) )
 	{
 		byte bonehide[MAXSTUDIOBONES];
 		mstudiobone_t *vrbones = (mstudiobone_t *)((byte *)m_pStudioHeader + m_pStudioHeader->boneindex);
@@ -2152,7 +2155,7 @@ static void R_StudioDrawPoints( void )
 
 		int vr_mesh_mode = 0;
 
-		if( r_vr_viewmodel && RI.currententity == tr.viewent )
+		if( r_vr_viewmodel && ( RI.currententity == tr.viewent || RI.currententity == &vr_lhand_ent ) )
 			vr_mesh_mode = VR_ViewModelMeshMode( j, ptexture[pskinref[pmesh->skinref]].name );
 
 		if( vr_mesh_mode == 1 )
@@ -3394,6 +3397,79 @@ void VR_DumpSequences( void )
 
 /*
 =================
+R_VRDrawLeftHand
+
+The universal left hand: the left arm of another weapon's model (the switchblade), held in its idle pose
+at the left controller. The right arm and the weapon itself are not drawn, see vr_lhand_hide_bones.
+=================
+*/
+static void R_VRDrawLeftHand( void )
+{
+	vec3_t origin, angles;
+	cl_entity_t *saved_ent = RI.currententity;
+	model_t *saved_model = RI.currentmodel;
+	float saved_blend = tr.blend;
+	studiohdr_t *hdr;
+	model_t *mod;
+	int idle = 0;
+
+	if( !VR_GetLeftHandPose( origin, angles ))
+		return;
+
+	mod = gEngfuncs.Mod_ForName( VR_LeftHandModel(), false, true );
+
+	if( !mod || mod->type != mod_studio )
+		return;
+
+	hdr = (studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, mod );
+
+	if( !hdr || hdr->numseq <= 0 )
+		return;
+
+	for( int i = 0; i < hdr->numseq; i++ )
+	{
+		mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex) + i;
+
+		if( VR_IsIdleLabel( sd->label ))
+		{
+			idle = i;
+			break;
+		}
+	}
+
+	memset( &vr_lhand_ent, 0, sizeof( vr_lhand_ent ));
+	vr_lhand_ent.model = mod;
+	vr_lhand_ent.index = 4000;	// no real entity, so no light is ever attached to it
+	VectorCopy( origin, vr_lhand_ent.origin );
+	VectorCopy( angles, vr_lhand_ent.angles );
+	VectorCopy( origin, vr_lhand_ent.curstate.origin );
+	VectorCopy( angles, vr_lhand_ent.curstate.angles );
+	vr_lhand_ent.curstate.sequence = idle;
+	vr_lhand_ent.curstate.frame = 0.0f;
+	vr_lhand_ent.curstate.rendermode = kRenderNormal;
+	vr_lhand_ent.curstate.renderamt = 255;
+
+	RI.currententity = &vr_lhand_ent;
+	RI.currentmodel = mod;
+	tr.blend = 1.0f;
+
+	VR_SetHandPass( true );
+	g_studio.interpolate = false;
+	R_StudioSetupTimings();
+	R_StudioDrawModelInternal( &vr_lhand_ent, STUDIO_RENDER );
+	g_studio.interpolate = true;
+	VR_SetHandPass( false );
+
+	// the clip plane may have been left on by the last arm mesh
+	pglDisable( GL_CLIP_PLANE0 );
+
+	RI.currententity = saved_ent;
+	RI.currentmodel = saved_model;
+	tr.blend = saved_blend;
+}
+
+/*
+=================
 R_RunViewmodelEvents
 =================
 */
@@ -3533,6 +3609,7 @@ void R_DrawViewModel( void )
 
 	if( vr_hand )
 	{
+		R_VRDrawLeftHand();
 		VR_DrawArmCap();
 		g_studio.interpolate = true;
 

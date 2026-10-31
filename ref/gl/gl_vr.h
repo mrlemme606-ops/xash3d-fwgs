@@ -59,5 +59,9 @@ void VR_DumpSequences( void );
 qboolean VR_FrameDone( void );
 qboolean VR_GetHandPose( int hand, float m[3][4], uint32_t *device );
 void VR_HUDCapture( void );
+qboolean VR_GetLeftHandPose( vec3_t origin, vec3_t angles );
+float VR_GetLeftHandScale( void );
+const char *VR_LeftHandModel( void );
+void VR_SetHandPass( qboolean left );
 
 #endif // GL_VR_H
