@@ -149,10 +149,11 @@ static CVAR_DEFINE_AUTO( vr_aim_debug, "0", 0, "print what the aim trace is doin
 static CVAR_DEFINE_AUTO( vr_vm_hide_bones, "^l_", FCVAR_ARCHIVE, "parts of the weapon model attached to bones whose name starts with (^) or contains one of these are not drawn (the left arm). Separate with +. vr_vm_dump_tex 2 lists the bones" );
 static CVAR_DEFINE_AUTO( vr_vm_cap_radius, "0", FCVAR_ARCHIVE, "size of the disc that closes the cut-off arm at the wrist (0 = none)" );
 static CVAR_DEFINE_AUTO( vr_vm_cap_gray, "0.1", FCVAR_ARCHIVE, "brightness of that disc, 0 = black, 1 = white" );
-static CVAR_DEFINE_AUTO( vr_melee_models, "fist+phone+knife+switchblade+branch+nightstick+syringe+crowbar+pipe+axe+hammer+bat", FCVAR_ARCHIVE, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_static_models, "phone+cell+mobile+flash+syringe+flare", 0, "weapon model names (part of the file name) whose animations never play, the model stays in one pose in your hand. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_melee_models, "fist+knife+switchblade+branch+nightstick+crowbar+pipe+axe+hammer+bat", 0, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
 static CVAR_DEFINE_AUTO( vr_melee_reach, "64", FCVAR_ARCHIVE, "how far in front of your swinging hand the game looks for something to hit, in units" );
 static CVAR_DEFINE_AUTO( vr_phone_light, "1", FCVAR_ARCHIVE, "1 = a spotlight shines from the weapons listed in vr_light_models, where your hand points" );
-static CVAR_DEFINE_AUTO( vr_light_models, "phone", FCVAR_ARCHIVE, "weapon model names (part of the file name) that work as a flashlight. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_light_models, "phone+cell+mobile+flash", 0, "weapon model names (part of the file name) that work as a flashlight. Separate with +" );
 static CVAR_DEFINE_AUTO( vr_light_distance, "700", FCVAR_ARCHIVE, "how far the flashlight reaches, in units" );
 static CVAR_DEFINE_AUTO( vr_light_radius, "150", FCVAR_ARCHIVE, "size of the lit area, in units" );
 static CVAR_DEFINE_AUTO( vr_light_brightness, "200", FCVAR_ARCHIVE, "brightness of the flashlight, 0 to 255" );
@@ -300,6 +301,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_cap_radius );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_cap_gray );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_static_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_freeze );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_lock_seq );
@@ -517,6 +519,7 @@ static void VR_UpdateHands( const ref_viewpass_t *game )
 
 static vec3_t vr_aim_target;
 static qboolean vr_aim_hit;	// the hand ray hit something, vr_aim_target is that point
+static qboolean vr_vm_static;	// the weapon in hand never animates (phone, syringe)
 static qboolean vr_vm_light;	// the weapon in hand is a flashlight (the phone)
 static qboolean vr_vm_melee;	// the weapon in hand is swung by hand
 static qboolean vr_dump_bones_done;
@@ -853,7 +856,7 @@ qboolean VR_ViewModelFrozen( void )
 		whip = gEngfuncs.pfnGetCvarPointer( "vr_in_whip" );
 
 	// melee weapons, and any weapon while you pistol whip: your own arm does the swinging
-	return ( vr_vm_melee && vr_melee_freeze.value ) || ( whip && whip->value > 0.5f );
+	return ( vr_vm_melee && vr_melee_freeze.value ) || vr_vm_static || ( whip && whip->value > 0.5f );
 }
 
 qboolean VR_ViewModelLock( int *seq, float *frame )
@@ -866,10 +869,22 @@ qboolean VR_ViewModelLock( int *seq, float *frame )
 	return true;
 }
 
-// animations that bring the weapon up end in the ready pose, everything else starts in it
-qboolean VR_FreezeAtEnd( const char *label )
+// weapons that hold still are shown in their idle pose: the same hand position every time
+qboolean VR_IsIdleLabel( const char *label )
 {
-	return VR_ContainsNoCase( label, "draw" ) || VR_ContainsNoCase( label, "deploy" ) || VR_ContainsNoCase( label, "equip" );
+	return VR_ContainsNoCase( label, "idle" );
+}
+
+// some GL calls made on our behalf (SteamVR) can leave an error behind, which the engine then blames on the next texture it loads
+void VR_DrainGLErrors( void )
+{
+	int i;
+
+	for( i = 0; i < 8; i++ )
+	{
+		if( pglGetError() == GL_NO_ERROR )
+			break;
+	}
 }
 
 qboolean VR_FrameDone( void )
@@ -1034,6 +1049,7 @@ static void VR_UpdateWeaponProfile( void )
 		VR_ModelBaseName( model, base, sizeof( base ));
 		vr_vm_melee = VR_ListMatches( vr_melee_models.string, base, true );
 		vr_vm_light = VR_ListMatches( vr_light_models.string, base, true );
+		vr_vm_static = VR_ListMatches( vr_static_models.string, base, true );
 		gEngfuncs.Cvar_SetValue( "vr_in_melee", vr_vm_melee ? 1.0f : 0.0f );
 	}
 
@@ -1999,6 +2015,7 @@ void VR_FinishFrame( void )
 	pglFlush();
 
 	vr.frame_done = true;
+	VR_DrainGLErrors();
 
 	if( vr_dump_done )
 	{

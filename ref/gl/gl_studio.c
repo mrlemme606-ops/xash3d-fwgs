@@ -3496,10 +3496,22 @@ void R_DrawViewModel( void )
 			}
 			else if( VR_ViewModelFrozen( ))
 			{
-				int seq = bound( 0, view->curstate.sequence, vhdr->numseq - 1 );
-				mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)vhdr + vhdr->seqindex) + seq;
+				// always the same pose, the first idle animation, so the hand never moves when the weapon would animate
+				int idle = 0;
 
-				view->curstate.frame = VR_FreezeAtEnd( sd->label ) ? 255.0f : 0.0f;
+				for( int i = 0; i < vhdr->numseq; i++ )
+				{
+					mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)vhdr + vhdr->seqindex) + i;
+
+					if( VR_IsIdleLabel( sd->label ))
+					{
+						idle = i;
+						break;
+					}
+				}
+
+				view->curstate.sequence = idle;
+				view->curstate.frame = 0.0f;
 				g_studio.interpolate = false;
 			}
 		}

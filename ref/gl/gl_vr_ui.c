@@ -207,6 +207,24 @@ void VR_HUDCapture( void )
 	hud.have = true;
 }
 
+// "0.5 1 2" -> 0.5, 1, 2 (what is missing keeps its default)
+static void VR_ParseFloats( const char *str, float *out, int count )
+{
+	int i;
+
+	for( i = 0; i < count; i++ )
+	{
+		while( *str == ' ' || *str == '\t' ) str++;
+
+		if( !*str )
+			break;
+
+		out[i] = Q_atof( str );
+
+		while( *str && *str != ' ' && *str != '\t' ) str++;
+	}
+}
+
 static void VR_UIHideHUD( void )
 {
 	if( hud.shown )
@@ -246,8 +264,8 @@ static void VR_UIUpdateHUD( void )
 		hud.created = true;
 	}
 
-	sscanf( vr_hud_crop.string, "%f %f %f %f", &c[0], &c[1], &c[2], &c[3] );
-	sscanf( vr_hud_pos.string, "%f %f %f", &pos[0], &pos[1], &pos[2] );
+	VR_ParseFloats( vr_hud_crop.string, c, 4 );
+	VR_ParseFloats( vr_hud_pos.string, pos, 3 );
 	c[0] = bound( 0.0f, c[0], 0.99f );
 	c[1] = bound( 0.0f, c[1], 0.99f );
 	c[2] = bound( c[0] + 0.01f, c[2], 1.0f );
@@ -501,6 +519,7 @@ void VR_UIUpdate( void )
 
 	VR_UIUpdatePointer( &panel );
 	VR_UIUpdateHUD();
+	VR_DrainGLErrors();
 }
 
 /*

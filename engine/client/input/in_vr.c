@@ -56,6 +56,7 @@ static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
 static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = body (mouse), 1 = head, 2 = right hand while you use/shoot and head otherwise (default), 3 = right hand always" );
 static CVAR_DEFINE_AUTO( vr_move_digital, "1", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
+static CVAR_DEFINE_AUTO( vr_use_aim_hand, "0", FCVAR_ARCHIVE, "1 = the use key (right grip) aims along your hand, 0 = along your head (doors open when you look at them)" );
 static CVAR_DEFINE_AUTO( vr_melee_enable, "1", FCVAR_ARCHIVE, "1 = swinging your hand fast with a melee weapon attacks" );
 static CVAR_DEFINE_AUTO( vr_melee_speed, "2.0", FCVAR_ARCHIVE, "hand speed in m/s that counts as a swing" );
 static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.1", FCVAR_ARCHIVE, "seconds between two swings (a swing has to slow down before the next one counts anyway)" );
@@ -186,6 +187,7 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_swing_pitch );
 	Cvar_RegisterVariable( &vr_in_melee );
 	Cvar_RegisterVariable( &vr_melee_enable );
+	Cvar_RegisterVariable( &vr_use_aim_hand );
 	Cvar_RegisterVariable( &vr_melee_speed );
 	Cvar_RegisterVariable( &vr_melee_cooldown );
 	Cvar_RegisterVariable( &vr_in_ray_x );
@@ -367,7 +369,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	mode = (int)vr_aim_mode.value;
 
 	// using something or shooting: aim with the hand for a moment (walking keeps following the head otherwise)
-	if( buttons & ( BIT( VRB_RTRIGGER ) | BIT( VRB_LTRIGGER ) | BIT( VRB_RGRIP ) | BIT( VRB_B )))
+	if( buttons & ( BIT( VRB_RTRIGGER ) | BIT( VRB_LTRIGGER ) | BIT( VRB_B ) | ( vr_use_aim_hand.value ? BIT( VRB_RGRIP ) : 0 )))
 		vr_hand_aim_until = host.realtime + 0.35;
 
 	// swinging a weapon by hand: a fast hand movement attacks, aimed where the hand is going
