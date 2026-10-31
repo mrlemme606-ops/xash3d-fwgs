@@ -17,6 +17,10 @@ so text is steady and reads comfortably without being glued to your face.
 #include "gl_vr.h"
 #include "xash3d_mathlib.h"
 
+#ifndef GL_COLOR_CLEAR_VALUE
+#define GL_COLOR_CLEAR_VALUE	0x0C22
+#endif
+
 #define OPENVR_API_NODLL
 #include <stdint.h>
 #include <stdbool.h>

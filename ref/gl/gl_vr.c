@@ -134,6 +134,8 @@ static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting t
 static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
 static CVAR_DEFINE_AUTO( vr_testscene, "0", 0, "diagnostic: 1 = a world-fixed wireframe room over the game, 2 = only that room, 3 = a pure SteamVR-only test room that bypasses the game completely" );
 static CVAR_DEFINE_AUTO( vr_hand_pitch, "60", FCVAR_ARCHIVE, "tilt the controller's pointing direction: positive = down, negative = up (degrees). Adjust until the laser points where your hand naturally points" );
+static CVAR_DEFINE_AUTO( vr_draw_axes, "1", FCVAR_ARCHIVE, "draw the small colored axes at each controller (debug visual)" );
+static CVAR_DEFINE_AUTO( vr_draw_laser, "1", FCVAR_ARCHIVE, "draw the laser line and the red aim cross from your right hand (debug visual)" );
 static CVAR_DEFINE_AUTO( vr_draw_hands, "1", FCVAR_ARCHIVE, "draw placeholder controllers and the laser pointer" );
 static CVAR_DEFINE_AUTO( vr_hand_weapon, "1", FCVAR_ARCHIVE, "draw the weapon at your right hand instead of in front of your face" );
 static CVAR_DEFINE_AUTO( vr_vm_grip_x, "13", FCVAR_ARCHIVE, "where the right hand holds the weapon model (model axes): forward" );
@@ -279,6 +281,20 @@ static void VR_Recenter_f( void )
 	gEngfuncs.Con_Printf( "VR: recentering on next frame\n" );
 }
 
+static void VR_VisualsOff_f( void )
+{
+	gEngfuncs.Cvar_SetValue( "vr_draw_axes", 0.0f );
+	gEngfuncs.Cvar_SetValue( "vr_draw_laser", 0.0f );
+	gEngfuncs.Con_Printf( "VR: controller debug visuals are off (vr_visuals_on brings them back)\n" );
+}
+
+static void VR_VisualsOn_f( void )
+{
+	gEngfuncs.Cvar_SetValue( "vr_draw_axes", 1.0f );
+	gEngfuncs.Cvar_SetValue( "vr_draw_laser", 1.0f );
+	gEngfuncs.Con_Printf( "VR: controller debug visuals are on\n" );
+}
+
 void VR_InitCvars( void )
 {
 	gEngfuncs.Cvar_RegisterVariable( &vr_enable );
@@ -290,6 +306,10 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_draw_hands );
+	gEngfuncs.Cvar_RegisterVariable( &vr_draw_axes );
+	gEngfuncs.Cvar_RegisterVariable( &vr_draw_laser );
+	gEngfuncs.Cmd_AddCommand( "vr_visuals_off", VR_VisualsOff_f, "hide all the controller debug visuals (axes, laser, aim cross) for a clean, immersive view" );
+	gEngfuncs.Cmd_AddCommand( "vr_visuals_on", VR_VisualsOn_f, "show the controller debug visuals again" );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_weapon );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_grip_x );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_grip_y );
@@ -1687,7 +1707,7 @@ static void VR_DrawHands( void )
 	float proj[16], view[16];
 	int saved_tmu, unit, h;
 
-	if( !vr_draw_hands.value || ( !vr.hand[0].valid && !vr.hand[1].valid ))
+	if( !vr_draw_hands.value || ( !vr_draw_axes.value && !vr_draw_laser.value ) || ( !vr.hand[0].valid && !vr.hand[1].valid ))
 		return;
 
 	Matrix4x4_ToArrayFloatGL( RI.projectionMatrix, proj );
@@ -1727,6 +1747,8 @@ static void VR_DrawHands( void )
 			continue;
 
 		// small axes: blue = pointing direction, red = sideways, green = up
+		if( vr_draw_axes.value )
+		{
 		pglColor3f( 0.3f, 0.5f, 1.0f );
 		pglVertex3f( vr.hand[h].pos[0], vr.hand[h].pos[1], vr.hand[h].pos[2] );
 		VectorScale( vr.hand[h].fwd, 4.0f, a );
@@ -1745,8 +1767,9 @@ static void VR_DrawHands( void )
 		VectorScale( vr.hand[h].up, 2.5f, a );
 		VectorAdd( vr.hand[h].pos, a, b );
 		pglVertex3f( b[0], b[1], b[2] );
+		}
 
-		if( h == 1 )
+		if( h == 1 && vr_draw_laser.value )
 		{
 			// laser from the right hand: bright when it is on the UI, dim otherwise
 			vec3_t to_target;
