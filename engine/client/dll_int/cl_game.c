@@ -2269,6 +2269,10 @@ pfnApplyShake
 */
 static void GAME_EXPORT pfnApplyShake( float *origin, float *angles, float factor )
 {
+	// VR: a shaking camera makes you sick, and the headset already moves the view
+	if( Cvar_VariableValue( "vr_in_active" ) > 0.0f && Cvar_VariableValue( "vr_shake" ) <= 0.0f )
+		return;
+
 	if( origin )
 		VectorMA( origin, factor, clgame.shake.applied_offset, origin );
 

@@ -15,6 +15,7 @@ GNU General Public License for more details.
 
 #include <stdarg.h>
 #include "gl_local.h"
+#include "gl_vr.h"
 #include "crclib.h"
 
 #define TEXTURES_HASH_SIZE	(MAX_TEXTURES >> 2)
@@ -2143,6 +2144,9 @@ was there.  This is used to test for texture thrashing.
 void R_ShowTextures( void )
 {
 	static qboolean showHelp = true;
+
+	// VR: called after the HUD is drawn and before the menus, a good moment to take the HUD apart from them
+	VR_HUDCapture();
 
 	if( !r_showtextures->value )
 		return;

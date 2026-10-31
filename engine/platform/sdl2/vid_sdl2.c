@@ -965,6 +965,14 @@ rserr_t R_ChangeDisplaySettings( int width, int height, window_mode_t window_mod
 {
 	rserr_t err;
 
+	// VR: the menus are laid out for the window, so always use the same one (launch option -vrwindow)
+	if( Sys_CheckParm( "-vrwindow" ))
+	{
+		width = 1920;
+		height = 1080;
+		window_mode = WINDOW_MODE_WINDOWED;
+	}
+
 	if( !host.hWnd )
 		err = VID_CreateWindow( width, height, window_mode );
 	else

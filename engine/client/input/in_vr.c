@@ -44,6 +44,9 @@ static CVAR_DEFINE_AUTO( vr_in_ray_z, "0", 0, "(internal) right hand position in
 static CVAR_DEFINE_AUTO( vr_in_ray_dx, "0", 0, "(internal) direction the right hand points" );
 static CVAR_DEFINE_AUTO( vr_in_ray_dy, "0", 0, "(internal) direction the right hand points" );
 static CVAR_DEFINE_AUTO( vr_in_ray_dz, "0", 0, "(internal) direction the right hand points" );
+static CVAR_DEFINE_AUTO( vr_in_whip, "0", 0, "(internal) pistol whipping right now" );
+static CVAR_DEFINE_AUTO( vr_in_menu, "1", 0, "(internal) a menu or the console is open" );
+static CVAR_DEFINE_AUTO( vr_shake, "0", FCVAR_ARCHIVE, "1 = the game may shake the camera (explosions, hits). Off is much easier on the stomach in VR" );
 static CVAR_DEFINE_AUTO( vr_in_crouch, "0", 0, "(internal) physically crouching" );
 static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
 
@@ -55,9 +58,9 @@ static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, u
 static CVAR_DEFINE_AUTO( vr_move_digital, "1", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
 static CVAR_DEFINE_AUTO( vr_melee_enable, "1", FCVAR_ARCHIVE, "1 = swinging your hand fast with a melee weapon attacks" );
 static CVAR_DEFINE_AUTO( vr_melee_speed, "2.0", FCVAR_ARCHIVE, "hand speed in m/s that counts as a swing" );
-static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.45", FCVAR_ARCHIVE, "seconds between two swings" );
+static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.1", FCVAR_ARCHIVE, "seconds between two swings (a swing has to slow down before the next one counts anyway)" );
 static CVAR_DEFINE_AUTO( vr_key_swing, "mouse1", FCVAR_ARCHIVE, "key pressed when you swing a melee weapon" );
-static CVAR_DEFINE_AUTO( vr_key_whip, "", FCVAR_ARCHIVE, "key pressed when you swing a gun (pistol whip). empty = nothing" );
+static CVAR_DEFINE_AUTO( vr_key_whip, "mouse2", FCVAR_ARCHIVE, "key pressed when you swing a gun (pistol whip). empty = nothing" );
 static CVAR_DEFINE_AUTO( vr_debug_move, "0", 0, "print the player's movement type when it changes (helps find where analog movement fails)" );
 
 // which key each controller button presses. single character, or mouse1/2/3, space, ctrl, shift, enter, tab, escape. empty = nothing
@@ -105,6 +108,8 @@ static qboolean vr_crouch_toggled;
 static int vr_jump_frames;
 static qboolean vr_dir_down[4];	// forward, back, left, right (with hysteresis)
 static int vr_last_movetype = -1;
+static qboolean vr_swing_armed = true;	// the hand has to slow down before the next swing counts
+static double vr_whip_until;
 static double vr_swing_until;	// aim along the swing until this time
 static double vr_melee_next;	// no new swing before this time
 static float vr_swing_yaw, vr_swing_pitch;
@@ -189,6 +194,9 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_ray_dx );
 	Cvar_RegisterVariable( &vr_in_ray_dy );
 	Cvar_RegisterVariable( &vr_in_ray_dz );
+	Cvar_RegisterVariable( &vr_in_whip );
+	Cvar_RegisterVariable( &vr_in_menu );
+	Cvar_RegisterVariable( &vr_shake );
 	Cvar_RegisterVariable( &vr_in_crouch );
 	Cvar_RegisterVariable( &vr_in_buttons );
 	Cvar_RegisterVariable( &vr_turn_mode );
@@ -263,9 +271,20 @@ static qboolean IN_VRHysteresis( qboolean was_down, float value )
 }
 
 // laser pointer: when the right hand points at the floating UI panel and a menu wants the cursor, move it there
+// where the laser pointed over the last moments, to click where you aimed and not where the trigger pull moved you
+static float vr_cur_x[16], vr_cur_y[16];
+static double vr_cur_t[16];
+static int vr_cur_n;
+static qboolean vr_cur_locked;
+static int vr_cur_lock_x, vr_cur_lock_y;
+
 static void IN_VRMoveCursor( void )
 {
 	int x, y;
+	qboolean trigger = FBitSet( (int)vr_in_buttons.value, BIT( VRB_RTRIGGER ));
+
+	if( !trigger )
+		vr_cur_locked = false;
 
 	if( vr_in_ui_hit.value < 0.5f )
 		return;
@@ -277,6 +296,31 @@ static void IN_VRMoveCursor( void )
 	y = (int)( vr_in_ui_y.value * refState.height );
 	x = bound( 0, x, refState.width - 1 );
 	y = bound( 0, y, refState.height - 1 );
+
+	vr_cur_x[vr_cur_n & 15] = x;
+	vr_cur_y[vr_cur_n & 15] = y;
+	vr_cur_t[vr_cur_n & 15] = host.realtime;
+	vr_cur_n++;
+
+	if( trigger && !vr_cur_locked )
+	{
+		// pulling the trigger moves the controller a little: click where you pointed a moment ago
+		int idx = vr_cur_n - 1, k;
+
+		for( k = 0; k < 15 && idx > 0 && vr_cur_t[idx & 15] > host.realtime - 0.10; k++ )
+			idx--;
+
+		vr_cur_lock_x = (int)vr_cur_x[idx & 15];
+		vr_cur_lock_y = (int)vr_cur_y[idx & 15];
+		vr_cur_locked = true;
+	}
+
+	// held still while the trigger is down, so a click is never lost to a small movement
+	if( vr_cur_locked )
+	{
+		x = vr_cur_lock_x;
+		y = vr_cur_lock_y;
+	}
 
 	// the real cursor first (client code that reads the OS cursor), then the exact position for the UI,
 	// so a window larger than the desktop can't clamp where the laser points
@@ -293,10 +337,24 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	int buttons, mode;
 	qboolean in_game, on_ladder, digital;
 
+	{
+		float menu = cls.key_dest != key_game ? 1.0f : 0.0f;
+
+		if( vr_in_menu.value != menu )
+			Cvar_DirectSetValue( &vr_in_menu, menu );
+	}
+
 	if( vr_in_active.value <= 0.0f )
 	{
 		IN_VRReleaseAll();
 		return;
+	}
+
+	{
+		float whip = host.realtime < vr_whip_until ? 1.0f : 0.0f;
+
+		if( vr_in_whip.value != whip )
+			Cvar_DirectSetValue( &vr_in_whip, whip );
 	}
 
 	IN_VRMoveCursor();
@@ -313,7 +371,10 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		vr_hand_aim_until = host.realtime + 0.35;
 
 	// swinging a weapon by hand: a fast hand movement attacks, aimed where the hand is going
-	if( in_game && vr_melee_enable.value && vr_in_hand_valid.value > 0.5f
+	if( vr_in_hand_speed.value < vr_melee_speed.value * 0.5f )
+		vr_swing_armed = true;
+
+	if( in_game && vr_melee_enable.value && vr_in_hand_valid.value > 0.5f && vr_swing_armed
 		&& vr_in_hand_speed.value > vr_melee_speed.value && host.realtime >= vr_melee_next
 		&& ( vr_in_melee.value > 0.5f || !COM_StringEmptyOrNULL( vr_key_whip.string )))
 	{
@@ -323,7 +384,15 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		vr_swing_pitch = vr_in_swing_pitch.value;
 		vr_swing_frames = 3;
 		vr_swing_whip = vr_in_melee.value < 0.5f;
+		vr_swing_armed = false;
+
+		// a gun being whipped holds still on screen for a moment
+		if( vr_swing_whip )
+			vr_whip_until = host.realtime + 0.7;
 	}
+
+	if( !in_game )
+		vr_swing_frames = 0;
 
 	if( vr_swing_frames > 0 )
 	{
@@ -354,6 +423,13 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		mode = 0;
 		aim_rel = 0.0f;
 		aim_pitch = 0.0f;
+	}
+
+	if( Cvar_VariableValue( "vr_aim_debug" ) > 0.0f && (( buttons & ~vr_prev_buttons ) & ( BIT( VRB_RTRIGGER ) | BIT( VRB_RGRIP ))))
+	{
+		Con_Printf( "VR trigger/grip pressed: sending yaw %.1f (body %.1f) pitch %.1f, aim from %s (hand valid %d, hand yaw %.1f pitch %.1f)\n",
+			cl.viewangles[YAW] + aim_rel, cl.viewangles[YAW], aim_pitch, mode == 2 ? "hand" : ( mode == 1 ? "head" : "body" ),
+			(int)vr_in_hand_valid.value, vr_in_hand_yaw.value, vr_in_hand_pitch.value );
 	}
 
 	// the stick means "walk where I look". the game walks along its aim, so rotate the stick by the difference

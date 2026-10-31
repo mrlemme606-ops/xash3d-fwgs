@@ -124,6 +124,7 @@ static CVAR_DEFINE_AUTO( vr_enable, "0", 0, "enable SteamVR (OpenVR) stereo rend
 static CVAR_DEFINE_AUTO( vr_worldscale, "39.37", 0, "game units per meter (GoldSrc: 1 unit = 1 inch)" );
 static CVAR_DEFINE_AUTO( vr_flip_roll, "0", 0, "set to 1 if head roll is inverted" );
 static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotation only), useful for diagnosing warping" );
+static CVAR_DEFINE_AUTO( vr_flip_vfov, "0", FCVAR_ARCHIVE, "diagnostic: swap the up and down field of view. Try 1 if what is drawn sits a little too low or high compared to the menu pointer" );
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.35", 0, "meters below your recentered height that count as physically crouching" );
 static CVAR_DEFINE_AUTO( vr_physical_crouch, "0", 0, "1 = crouching in real life also crouches the character (the view then drops twice, see notes)" );
@@ -132,35 +133,36 @@ static CVAR_DEFINE_AUTO( vr_render_scale, "1.0", 0, "eye image size relative to 
 static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting the eye images (matches Valve's sample)" );
 static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
 static CVAR_DEFINE_AUTO( vr_testscene, "0", 0, "diagnostic: 1 = a world-fixed wireframe room over the game, 2 = only that room, 3 = a pure SteamVR-only test room that bypasses the game completely" );
-static CVAR_DEFINE_AUTO( vr_hand_pitch, "60", 0, "tilt the controller's pointing direction: positive = down, negative = up (degrees). Adjust until the laser points where your hand naturally points" );
-static CVAR_DEFINE_AUTO( vr_draw_hands, "1", 0, "draw placeholder controllers and the laser pointer" );
-static CVAR_DEFINE_AUTO( vr_hand_weapon, "1", 0, "draw the weapon at your right hand instead of in front of your face" );
-static CVAR_DEFINE_AUTO( vr_vm_grip_x, "13", 0, "where the right hand holds the weapon model (model axes): forward" );
-static CVAR_DEFINE_AUTO( vr_vm_grip_y, "-4", 0, "where the right hand holds the weapon model: left (negative = right)" );
-static CVAR_DEFINE_AUTO( vr_vm_grip_z, "-3", 0, "where the right hand holds the weapon model: up" );
-static CVAR_DEFINE_AUTO( vr_vm_flip_roll, "0", 0, "set to 1 if the weapon is rolled the wrong way" );
-static CVAR_DEFINE_AUTO( vr_vm_pitch, "0", 0, "extra rotation of the weapon model: pitch degrees" );
-static CVAR_DEFINE_AUTO( vr_vm_yaw, "0", 0, "extra rotation of the weapon model: yaw degrees" );
-static CVAR_DEFINE_AUTO( vr_vm_roll, "0", 0, "extra rotation of the weapon model: roll degrees" );
-static CVAR_DEFINE_AUTO( vr_aim_trace, "1", 0, "1 = shots go to the exact point your hand ray hits, 0 = fixed distance (vr_aim_converge)" );
+static CVAR_DEFINE_AUTO( vr_hand_pitch, "60", FCVAR_ARCHIVE, "tilt the controller's pointing direction: positive = down, negative = up (degrees). Adjust until the laser points where your hand naturally points" );
+static CVAR_DEFINE_AUTO( vr_draw_hands, "1", FCVAR_ARCHIVE, "draw placeholder controllers and the laser pointer" );
+static CVAR_DEFINE_AUTO( vr_hand_weapon, "1", FCVAR_ARCHIVE, "draw the weapon at your right hand instead of in front of your face" );
+static CVAR_DEFINE_AUTO( vr_vm_grip_x, "13", FCVAR_ARCHIVE, "where the right hand holds the weapon model (model axes): forward" );
+static CVAR_DEFINE_AUTO( vr_vm_grip_y, "-4", FCVAR_ARCHIVE, "where the right hand holds the weapon model: left (negative = right)" );
+static CVAR_DEFINE_AUTO( vr_vm_grip_z, "-3", FCVAR_ARCHIVE, "where the right hand holds the weapon model: up" );
+static CVAR_DEFINE_AUTO( vr_vm_flip_roll, "0", FCVAR_ARCHIVE, "set to 1 if the weapon is rolled the wrong way" );
+static CVAR_DEFINE_AUTO( vr_vm_pitch, "0", FCVAR_ARCHIVE, "extra rotation of the weapon model: pitch degrees" );
+static CVAR_DEFINE_AUTO( vr_vm_yaw, "0", FCVAR_ARCHIVE, "extra rotation of the weapon model: yaw degrees" );
+static CVAR_DEFINE_AUTO( vr_vm_roll, "0", FCVAR_ARCHIVE, "extra rotation of the weapon model: roll degrees" );
+static CVAR_DEFINE_AUTO( vr_aim_trace, "1", FCVAR_ARCHIVE, "1 = shots go to the exact point your hand ray hits, 0 = fixed distance (vr_aim_converge)" );
 static CVAR_DEFINE_AUTO( vr_aim_converge, "96", 0, "only used when vr_aim_trace is 0: distance in units where the game's aim meets your hand's pointing direction" );
 static CVAR_DEFINE_AUTO( vr_aim_debug, "0", 0, "print what the aim trace is doing about once a second" );
-static CVAR_DEFINE_AUTO( vr_vm_hide_bones, "Bip01 L +left", 0, "parts of the weapon model attached to bones whose name contains one of these are not drawn (the left arm). Separate with +. vr_vm_dump_tex 2 lists the bones" );
-static CVAR_DEFINE_AUTO( vr_vm_left_cut, "0", 0, "fallback for the left arm: hide model parts further than this many units to the left of your hand (0 = off)" );
-static CVAR_DEFINE_AUTO( vr_vm_cap_radius, "1.8", 0, "size of the disc that closes the cut-off arm at the wrist (0 = none)" );
-static CVAR_DEFINE_AUTO( vr_vm_cap_gray, "0.1", 0, "brightness of that disc, 0 = black, 1 = white" );
-static CVAR_DEFINE_AUTO( vr_melee_models, "fist+phone+knife+switchblade+branch+nightstick+syringe+crowbar+pipe+axe+hammer+bat", 0, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
-static CVAR_DEFINE_AUTO( vr_melee_reach, "64", 0, "how far in front of your swinging hand the game looks for something to hit, in units" );
-static CVAR_DEFINE_AUTO( vr_phone_light, "1", 0, "1 = a spotlight shines from the weapons listed in vr_light_models, where your hand points" );
-static CVAR_DEFINE_AUTO( vr_light_models, "phone", 0, "weapon model names (part of the file name) that work as a flashlight. Separate with +" );
-static CVAR_DEFINE_AUTO( vr_light_distance, "700", 0, "how far the flashlight reaches, in units" );
-static CVAR_DEFINE_AUTO( vr_light_radius, "150", 0, "size of the lit area, in units" );
-static CVAR_DEFINE_AUTO( vr_light_brightness, "200", 0, "brightness of the flashlight, 0 to 255" );
-static CVAR_DEFINE_AUTO( vr_melee_freeze, "1", 0, "1 = melee weapons hold their first animation frame, so only your real arm swings" );
-static CVAR_DEFINE_AUTO( vr_vm_scale, "0.5", 0, "size of the weapon model in your hand (1.0 = original)" );
-static CVAR_DEFINE_AUTO( vr_vm_hide_tex, "sleeve", 0, "texture name fragments of weapon model parts to hide completely. Separate with + (a comma does not work in the console)" );
-static CVAR_DEFINE_AUTO( vr_vm_clip_tex, "glove+hand+fingers+tex1+tex2", 0, "texture name fragments of weapon model parts (the arm) that are cut off behind the wrist. Separate with +" );
-static CVAR_DEFINE_AUTO( vr_vm_arm_cut, "2", 0, "where the arm is cut off, in units behind your hand (bigger = more arm visible)" );
+static CVAR_DEFINE_AUTO( vr_vm_hide_bones, "^l_", FCVAR_ARCHIVE, "parts of the weapon model attached to bones whose name starts with (^) or contains one of these are not drawn (the left arm). Separate with +. vr_vm_dump_tex 2 lists the bones" );
+static CVAR_DEFINE_AUTO( vr_vm_cap_radius, "0", FCVAR_ARCHIVE, "size of the disc that closes the cut-off arm at the wrist (0 = none)" );
+static CVAR_DEFINE_AUTO( vr_vm_cap_gray, "0.1", FCVAR_ARCHIVE, "brightness of that disc, 0 = black, 1 = white" );
+static CVAR_DEFINE_AUTO( vr_melee_models, "fist+phone+knife+switchblade+branch+nightstick+syringe+crowbar+pipe+axe+hammer+bat", FCVAR_ARCHIVE, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_melee_reach, "64", FCVAR_ARCHIVE, "how far in front of your swinging hand the game looks for something to hit, in units" );
+static CVAR_DEFINE_AUTO( vr_phone_light, "1", FCVAR_ARCHIVE, "1 = a spotlight shines from the weapons listed in vr_light_models, where your hand points" );
+static CVAR_DEFINE_AUTO( vr_light_models, "phone", FCVAR_ARCHIVE, "weapon model names (part of the file name) that work as a flashlight. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_light_distance, "700", FCVAR_ARCHIVE, "how far the flashlight reaches, in units" );
+static CVAR_DEFINE_AUTO( vr_light_radius, "150", FCVAR_ARCHIVE, "size of the lit area, in units" );
+static CVAR_DEFINE_AUTO( vr_light_brightness, "200", FCVAR_ARCHIVE, "brightness of the flashlight, 0 to 255" );
+static CVAR_DEFINE_AUTO( vr_vm_lock_seq, "-1", 0, "testing: show this animation sequence of the weapon model (-1 = normal). vr_vm_seqlist lists them" );
+static CVAR_DEFINE_AUTO( vr_vm_lock_frame, "0", 0, "testing: frame of that sequence to hold" );
+static CVAR_DEFINE_AUTO( vr_melee_freeze, "1", FCVAR_ARCHIVE, "1 = melee weapons hold their first animation frame, so only your real arm swings" );
+static CVAR_DEFINE_AUTO( vr_vm_scale, "0.5", FCVAR_ARCHIVE, "size of the weapon model in your hand (1.0 = original)" );
+static CVAR_DEFINE_AUTO( vr_vm_hide_tex, "sleeve", FCVAR_ARCHIVE, "texture name fragments of weapon model parts to hide completely. Separate with + (a comma does not work in the console)" );
+static CVAR_DEFINE_AUTO( vr_vm_clip_tex, "glove+hand+fingers+tex1+tex2", FCVAR_ARCHIVE, "texture name fragments of weapon model parts (the arm) that are cut off behind the wrist. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_vm_arm_cut, "2", FCVAR_ARCHIVE, "where the arm is cut off, in units behind your hand (bigger = more arm visible)" );
 static CVAR_DEFINE_AUTO( vr_vm_dump_tex, "0", 0, "1 = print the texture name of every weapon mesh once" );
 static qboolean vr_dump_done;
 static CVAR_DEFINE_AUTO( vr_debug, "0", 0, "print VR diagnostics about once a second" );
@@ -283,6 +285,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_flip_roll );
 	gEngfuncs.Cvar_RegisterVariable( &vr_positional );
 	gEngfuncs.Cvar_RegisterVariable( &vr_fov_scale );
+	gEngfuncs.Cvar_RegisterVariable( &vr_flip_vfov );
 	gEngfuncs.Cvar_RegisterVariable( &vr_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_draw_hands );
@@ -294,12 +297,14 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_aim_converge );
 	gEngfuncs.Cvar_RegisterVariable( &vr_aim_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_hide_bones );
-	gEngfuncs.Cvar_RegisterVariable( &vr_vm_left_cut );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_cap_radius );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_cap_gray );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_freeze );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_lock_seq );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_lock_frame );
+	gEngfuncs.Cmd_AddCommand( "vr_vm_seqlist", VR_DumpSequences, "list the animation sequences of the weapon you hold" );
 	gEngfuncs.Cvar_RegisterVariable( &vr_phone_light );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_distance );
@@ -396,8 +401,8 @@ static void VR_Init( void )
 		vr.system->GetProjectionRaw( eye, &l, &r, &t, &b );
 		vr.tan_frustum[eye][0] = l;
 		vr.tan_frustum[eye][1] = r;
-		vr.tan_frustum[eye][2] = -t;
-		vr.tan_frustum[eye][3] = -b;
+		vr.tan_frustum[eye][2] = vr_flip_vfov.value ? b : -t;
+		vr.tan_frustum[eye][3] = vr_flip_vfov.value ? t : -b;
 
 		e = vr.system->GetEyeToHeadTransform( eye );
 		vr.eye_offset[eye][0] = e.m[0][3];
@@ -436,8 +441,8 @@ static void VR_UpdateEyeParams( void )
 		vr.system->GetProjectionRaw( eye, &l, &r, &t, &b );
 		vr.tan_frustum[eye][0] = l;
 		vr.tan_frustum[eye][1] = r;
-		vr.tan_frustum[eye][2] = -t;
-		vr.tan_frustum[eye][3] = -b;
+		vr.tan_frustum[eye][2] = vr_flip_vfov.value ? b : -t;
+		vr.tan_frustum[eye][3] = vr_flip_vfov.value ? t : -b;
 
 		e = vr.system->GetEyeToHeadTransform( eye );
 
@@ -653,7 +658,14 @@ static void VR_PublishUI( void )
 {
 	float u = 0.0f, v = 0.0f, dist = 0.0f;
 
-	vr.ui_hit = vr.hand[1].valid && VR_UIRayHit( vr.hand[1].origin_t, vr.hand[1].dir_t, &u, &v, &dist );
+	static cvar_t *menu_var;
+
+	if( !menu_var )
+		menu_var = gEngfuncs.pfnGetCvarPointer( "vr_in_menu" );
+
+	// the panel only matters while a menu is open, in the game you aim at the world
+	vr.ui_hit = ( !menu_var || menu_var->value > 0.5f ) && vr.hand[1].valid
+		&& VR_UIRayHit( vr.hand[1].origin_t, vr.hand[1].dir_t, &u, &v, &dist );
 	vr.ui_dist = dist;
 	VR_UISetPointer( vr.ui_hit, u, v );
 
@@ -749,8 +761,19 @@ static qboolean VR_ListMatches( const char *list, const char *name, qboolean spl
 		while( *p && !VR_IS_SEP( *p ) && n < 63 ) frag[n++] = *p++;
 		frag[n] = 0;
 
-		if( n && VR_ContainsNoCase( name, frag ))
+		if( !n )
+			continue;
+
+		if( frag[0] == '^' )
+		{
+			// ^name: the name must start with it
+			if( n > 1 && !Q_strnicmp( name, frag + 1, n - 1 ))
+				return true;
+		}
+		else if( VR_ContainsNoCase( name, frag ))
+		{
 			return true;
+		}
 	}
 
 #undef VR_IS_SEP
@@ -822,21 +845,48 @@ qboolean VR_ViewModelBoneHidden( const char *bonename )
 	return VR_ListMatches( vr_vm_hide_bones.string, bonename, false );
 }
 
-// fallback for the left arm when bone names don't tell: anything far enough to the left of the hand
-qboolean VR_ViewModelVertexHidden( const float *pos )
-{
-	vec3_t rel;
-
-	if( vr_vm_left_cut.value <= 0.0f || !vr.hand[1].valid )
-		return false;
-
-	VectorSubtract( pos, vr.hand[1].pos, rel );
-	return DotProduct( rel, vr.hand[1].left ) > vr_vm_left_cut.value;
-}
-
 qboolean VR_ViewModelFrozen( void )
 {
-	return vr_vm_melee && vr_melee_freeze.value;
+	static cvar_t *whip;
+
+	if( !whip )
+		whip = gEngfuncs.pfnGetCvarPointer( "vr_in_whip" );
+
+	// melee weapons, and any weapon while you pistol whip: your own arm does the swinging
+	return ( vr_vm_melee && vr_melee_freeze.value ) || ( whip && whip->value > 0.5f );
+}
+
+qboolean VR_ViewModelLock( int *seq, float *frame )
+{
+	if( vr_vm_lock_seq.value < 0.0f )
+		return false;
+
+	*seq = (int)vr_vm_lock_seq.value;
+	*frame = vr_vm_lock_frame.value;
+	return true;
+}
+
+// animations that bring the weapon up end in the ready pose, everything else starts in it
+qboolean VR_FreezeAtEnd( const char *label )
+{
+	return VR_ContainsNoCase( label, "draw" ) || VR_ContainsNoCase( label, "deploy" ) || VR_ContainsNoCase( label, "equip" );
+}
+
+qboolean VR_FrameDone( void )
+{
+	return vr.frame_done;
+}
+
+qboolean VR_GetHandPose( int hand, float m[3][4], uint32_t *device )
+{
+	uint32_t dev = VR_InputGetDevice( hand );
+
+	if( dev >= VR_MAX_DEVICES || !vr.poses[dev].bPoseIsValid )
+		return false;
+
+	memcpy( m, vr.poses[dev].mDeviceToAbsoluteTracking.m, sizeof( float ) * 12 );
+	*device = dev;
+	return true;
 }
 
 // a dark disc that closes the arm where it is cut off, so you can't look into it
@@ -913,7 +963,7 @@ When you switch weapons they are restored, then vr_weapon_<model>.cfg is run if 
 static convar_t *vr_tune_vars[] =
 {
 	&vr_vm_grip_x, &vr_vm_grip_y, &vr_vm_grip_z, &vr_vm_pitch, &vr_vm_yaw,
-	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut, &vr_vm_left_cut
+	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut
 };
 
 #define VR_TUNE_COUNT ( (int)( sizeof( vr_tune_vars ) / sizeof( vr_tune_vars[0] )))

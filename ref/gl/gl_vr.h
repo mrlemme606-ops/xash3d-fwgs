@@ -52,6 +52,11 @@ void VR_DrawArmCap( void );
 qboolean VR_ViewModelFrozen( void );
 qboolean VR_WantBoneDump( void );
 qboolean VR_ViewModelBoneHidden( const char *bonename );
-qboolean VR_ViewModelVertexHidden( const float *pos );
+qboolean VR_ViewModelLock( int *seq, float *frame );
+qboolean VR_FreezeAtEnd( const char *label );
+void VR_DumpSequences( void );
+qboolean VR_FrameDone( void );
+qboolean VR_GetHandPose( int hand, float m[3][4], uint32_t *device );
+void VR_HUDCapture( void );
 
 #endif // GL_VR_H

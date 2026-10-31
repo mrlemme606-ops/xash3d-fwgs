@@ -2057,7 +2057,7 @@ static void R_StudioDrawPoints( void )
 			bonehide[b] = VR_ViewModelBoneHidden( vrbones[b].name );
 
 		for( int i = 0; i < numverts; i++ )
-			g_studio.vr_hidden[i] = ( pvertbone[i] < nb && bonehide[pvertbone[i]] ) || VR_ViewModelVertexHidden( g_studio.verts[i] );
+			g_studio.vr_hidden[i] = ( pvertbone[i] < nb && bonehide[pvertbone[i]] );
 
 		g_studio.vr_filter = true;
 	}
@@ -3361,6 +3361,39 @@ void R_DrawStudioModel( cl_entity_t *e )
 
 /*
 =================
+VR_DumpSequences
+
+vr_vm_seqlist: the animations of the weapon in hand, to pick poses with vr_vm_lock_seq / vr_vm_lock_frame
+=================
+*/
+void VR_DumpSequences( void )
+{
+	cl_entity_t *view = tr.viewent;
+	studiohdr_t *hdr;
+
+	if( !view || !view->model || view->model->type != mod_studio )
+	{
+		gEngfuncs.Con_Printf( "VR: no weapon model right now\n" );
+		return;
+	}
+
+	hdr = (studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, view->model );
+
+	if( !hdr )
+		return;
+
+	gEngfuncs.Con_Printf( "%s: %d sequences\n", view->model->name, hdr->numseq );
+
+	for( int i = 0; i < hdr->numseq; i++ )
+	{
+		mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex) + i;
+
+		gEngfuncs.Con_Printf( "  %2d  %-24s %3d frames, %.0f fps\n", i, sd->label, sd->numframes, sd->fps );
+	}
+}
+
+/*
+=================
 R_RunViewmodelEvents
 =================
 */
@@ -3423,6 +3456,9 @@ void R_DrawViewModel( void )
 
 	// VR: draw the weapon where the right hand is
 	vec3_t vr_origin, vr_angles, saved_origin, saved_angles;
+	int vr_saved_seq = 0;
+	float vr_saved_frame = 0.0f;
+	qboolean vr_restore_anim = false;
 	qboolean vr_hand = VR_GetViewModelPose( vr_origin, vr_angles );
 
 	if( vr_hand )
@@ -3436,9 +3472,38 @@ void R_DrawViewModel( void )
 	// adjust the depth range to prevent view model from poking into walls
 	r_vr_viewmodel = vr_hand;
 
-	// melee weapons: hold the first frame, your own arm does the swinging
-	if( vr_hand && VR_ViewModelFrozen( ))
-		g_studio.interpolate = false;
+	// melee weapons and pistol whips: hold one pose, your own arm does the swinging.
+	// vr_vm_lock_seq / vr_vm_lock_frame hold any pose for testing
+	if( vr_hand && view->model->type == mod_studio )
+	{
+		studiohdr_t *vhdr = (studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, view->model );
+		int lock_seq = 0;
+		float lock_frame = 0.0f;
+
+		if( vhdr && vhdr->numseq > 0 )
+		{
+			vr_saved_seq = view->curstate.sequence;
+			vr_saved_frame = view->curstate.frame;
+			vr_restore_anim = true;
+
+			if( VR_ViewModelLock( &lock_seq, &lock_frame ) && lock_seq < vhdr->numseq )
+			{
+				mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)vhdr + vhdr->seqindex) + lock_seq;
+
+				view->curstate.sequence = lock_seq;
+				view->curstate.frame = sd->numframes > 1 ? bound( 0.0f, lock_frame, (float)( sd->numframes - 1 )) * 256.0f / ( sd->numframes - 1 ) : 0.0f;
+				g_studio.interpolate = false;
+			}
+			else if( VR_ViewModelFrozen( ))
+			{
+				int seq = bound( 0, view->curstate.sequence, vhdr->numseq - 1 );
+				mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)vhdr + vhdr->seqindex) + seq;
+
+				view->curstate.frame = VR_FreezeAtEnd( sd->label ) ? 255.0f : 0.0f;
+				g_studio.interpolate = false;
+			}
+		}
+	}
 
 	pglDepthRange( gldepthmin, gldepthmin + VIEWMODEL_DEPTH_RANGE * ( gldepthmax - gldepthmin ));
 	RI.currentmodel = RI.currententity->model;
@@ -3458,6 +3523,12 @@ void R_DrawViewModel( void )
 	{
 		VR_DrawArmCap();
 		g_studio.interpolate = true;
+
+		if( vr_restore_anim )
+		{
+			view->curstate.sequence = vr_saved_seq;
+			view->curstate.frame = vr_saved_frame;
+		}
 	}
 
 	r_vr_viewmodel = false;
