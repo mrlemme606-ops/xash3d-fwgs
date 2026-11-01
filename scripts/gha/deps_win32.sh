@@ -2,9 +2,11 @@
 
 . scripts/lib.sh
 
-curl -L "http://libsdl.org/release/SDL2-devel-$SDL_VERSION-VC.zip" -o SDL2.zip
-unzip -q SDL2.zip
-mv "SDL2-$SDL_VERSION" SDL2_VC
+rm -rf SDL2_VC SDL2.zip "SDL2-$SDL_VERSION"
+curl -fL --retry 5 --retry-delay 3 "https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VERSION/SDL2-devel-$SDL_VERSION-VC.zip" -o SDL2.zip || exit 1
+unzip -q SDL2.zip || exit 1
+mv "SDL2-$SDL_VERSION" SDL2_VC || exit 1
+test -f SDL2_VC/include/SDL.h || { echo "SDL2 headers missing after download"; exit 1; }
 
 if [ "$GH_CPU_ARCH" = "i386" ]; then
 	rustup target add i686-pc-windows-msvc
