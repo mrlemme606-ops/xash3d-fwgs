@@ -821,6 +821,51 @@ void R_DrawFog( void )
 R_DrawEntitiesOnList
 =============
 */
+// Cry of Fear draws its sky as models (sky_sphere_*.mdl, sky_blixt.mdl...) that are centered on the viewer
+qboolean r_vr_skydome;
+
+static qboolean R_IsSkyModel( const cl_entity_t *e )
+{
+	return e && e->model && e->model->type == mod_studio && Q_stristr( e->model->name, "/sky_" );
+}
+
+static void R_DrawSkyModels( void )
+{
+	int n, i;
+
+	r_vr_skydome = false;
+
+	if( !VR_SkyModelsOn() || !tr.draw_list || !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) || FBitSet( RI.rvp.flags, RF_ONLY_CLIENTDRAW ))
+		return;
+
+	n = tr.draw_list->num_solid_entities + tr.draw_list->num_trans_entities;
+
+	for( i = 0; i < n; i++ )
+	{
+		cl_entity_t *e = i < tr.draw_list->num_solid_entities ? tr.draw_list->solid_entities[i]
+			: tr.draw_list->trans_entities[i - tr.draw_list->num_solid_entities];
+		vec3_t saved;
+
+		if( !R_IsSkyModel( e ))
+			continue;
+
+		VectorCopy( e->origin, saved );
+		VectorCopy( RI.rvp.vieworigin, e->origin );
+		RI.currententity = e;
+		RI.currentmodel = e->model;
+
+		// behind everything: the world is drawn over it afterwards
+		pglDepthFunc( GL_ALWAYS );
+		pglDepthMask( GL_FALSE );
+		R_DrawStudioModel( e );
+		pglDepthMask( GL_TRUE );
+		pglDepthFunc( GL_LEQUAL );
+
+		VectorCopy( saved, e->origin );
+		r_vr_skydome = true;
+	}
+}
+
 static void R_DrawEntitiesOnList( void )
 {
 	tr.blend = 1.0f;
@@ -833,6 +878,9 @@ static void R_DrawEntitiesOnList( void )
 		RI.currentmodel = RI.currententity->model;
 
 		if( !RI.currentmodel && RI.currententity->player && !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
+			continue;
+
+		if( r_vr_skydome && R_IsSkyModel( RI.currententity ))
 			continue;
 
 		Assert( RI.currententity != NULL );
@@ -907,6 +955,9 @@ static void R_DrawEntitiesOnList( void )
 	{
 		RI.currententity = tr.draw_list->trans_entities[i];
 		RI.currentmodel = RI.currententity->model;
+
+		if( r_vr_skydome && R_IsSkyModel( RI.currententity ))
+			continue;
 
 		// handle studiomodels with custom rendermodes on texture
 		if( RI.currententity->curstate.rendermode != kRenderNormal )
@@ -996,6 +1047,7 @@ void R_RenderScene( void )
 	R_Clear( ~0 );
 
 	R_MarkLeaves();
+	R_DrawSkyModels();
 	R_DrawFog ();
 	if( FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
 		R_AnimateRipples();

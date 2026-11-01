@@ -93,8 +93,8 @@ static CVAR_DEFINE_AUTO( vr_rl_pouch_down, "26", FCVAR_ARCHIVE, "where the magaz
 static CVAR_DEFINE_AUTO( vr_rl_pouch_side, "9", FCVAR_ARCHIVE, "where the magazine pouch is: units to your left (negative = right)" );
 static CVAR_DEFINE_AUTO( vr_rl_pouch_fwd, "3", FCVAR_ARCHIVE, "where the magazine pouch is: units in front of you" );
 static CVAR_DEFINE_AUTO( vr_rl_pouch_radius, "14", FCVAR_ARCHIVE, "how close your left hand has to be to the pouch to take a magazine" );
-static CVAR_DEFINE_AUTO( vr_rl_mag_radius, "8", FCVAR_ARCHIVE, "how close the magazine has to be to the magazine well to go in (also to pull it out by hand)" );
-static CVAR_DEFINE_AUTO( vr_rl_bolt_radius, "7", FCVAR_ARCHIVE, "how close your left hand has to be to the slide / bolt to grab it" );
+static CVAR_DEFINE_AUTO( vr_rl_mag_radius, "10", FCVAR_ARCHIVE, "how close the magazine has to be to the magazine well to go in (also to pull it out by hand)" );
+static CVAR_DEFINE_AUTO( vr_rl_bolt_radius, "9", FCVAR_ARCHIVE, "how close your left hand has to be to the slide / bolt to grab it" );
 static CVAR_DEFINE_AUTO( vr_rl_grip_radius, "12", FCVAR_ARCHIVE, "how close your left hand has to be to the gun for the left grip to hold it with two hands" );
 static CVAR_DEFINE_AUTO( vr_rl_travel_scale, "1", FCVAR_ARCHIVE, "multiplies how far slides and bolts travel (1 = table value)" );
 static CVAR_DEFINE_AUTO( vr_rl_always_rack, "0", FCVAR_ARCHIVE, "1 = the bolt always has to be worked after a reload, not only when the gun was empty" );
@@ -126,6 +126,7 @@ static struct
 	double		game_start, ignore_until;
 	int		pulse_frames;
 	qboolean	bolt_back_seen;
+	qboolean	need_release;	// the left trigger must be let go before it can grab again
 	qboolean	mag_clear;	// the hand has left the magazine well since it took the magazine out
 	double		mute_until, eject_time;
 	qboolean	mute_sent;
@@ -853,6 +854,9 @@ void VR_ReloadTick( void )
 		RL_SetState( RL_GAME );
 	}
 
+	if( !( buttons & ( 1 << RLB_LTRIGGER )))
+		rl.need_release = false;
+
 	switch( rl.state )
 	{
 	case RL_READY:
@@ -863,17 +867,24 @@ void VR_ReloadTick( void )
 			break;
 		}
 
-		// or pull it out by hand
-		if(( pressed & ( 1 << RLB_LTRIGGER )) && rl.zone_have[RLZ_MAG] && RL_Dist( lpos, rl.zone[RLZ_MAG] ) < vr_rl_mag_radius.value )
+		// or reach for the magazine or the slide, whichever is closer. holding the trigger while you get there works too
+		if(( buttons & ( 1 << RLB_LTRIGGER )) && !rl.need_release )
 		{
-			RL_Eject( empty_now, RL_HOLDMAG );
-			break;
-		}
+			float dm = rl.zone_have[RLZ_MAG] ? RL_Dist( lpos, rl.zone[RLZ_MAG] ) : 9999.0f;
+			float db = ( rl.def->rule != RULE_NONE && rl.zone_have[RLZ_BOLT] ) ? RL_Dist( lpos, rl.zone[RLZ_BOLT] ) : 9999.0f;
+			qboolean take_mag = dm < vr_rl_mag_radius.value && dm <= db;
+			qboolean take_bolt = db < vr_rl_bolt_radius.value && !take_mag;
 
-		// or play with the slide
-		if(( pressed & ( 1 << RLB_LTRIGGER )) && rl.def->rule != RULE_NONE && rl.zone_have[RLZ_BOLT]
-			&& RL_Dist( lpos, rl.zone[RLZ_BOLT] ) < vr_rl_bolt_radius.value )
-		{
+			if( take_mag )
+			{
+				RL_Eject( empty_now, RL_HOLDMAG );
+				break;
+			}
+
+			if( !take_bolt )
+				break;
+
+
 			rl.fun_bolt = true;
 			rl.bolt_start = 0.0f;
 			rl.bolt_back_seen = false;
@@ -907,6 +918,7 @@ void VR_ReloadTick( void )
 		{
 			// it goes in
 			RL_Sound( RLE_MAGIN );
+			rl.need_release = true;
 
 			if( !rl.was_empty || rl.def->rule == RULE_NONE )
 			{
@@ -935,7 +947,7 @@ void VR_ReloadTick( void )
 			break;
 		}
 
-		if(( pressed & ( 1 << RLB_LTRIGGER )) && rl.zone_have[RLZ_BOLT] && RL_Dist( lpos, rl.zone[RLZ_BOLT] ) < vr_rl_bolt_radius.value )
+		if(( buttons & ( 1 << RLB_LTRIGGER )) && !rl.need_release && rl.zone_have[RLZ_BOLT] && RL_Dist( lpos, rl.zone[RLZ_BOLT] ) < vr_rl_bolt_radius.value )
 		{
 			rl.fun_bolt = false;
 			rl.bolt_start = rl.bolt_off;

@@ -3730,7 +3730,10 @@ void R_DrawWorld( void )
 		R_RenderDetails( R_HasEnabledVBO() ? 2 : 3 );
 		R_DrawTriangleOutlines();
 
-		if( skychain )
+		// the map has its sky as models, drawn already: the black sky box must not cover them
+		extern qboolean r_vr_skydome;
+
+		if( skychain && !r_vr_skydome )
 			R_DrawSkyBox();
 	}
 

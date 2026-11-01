@@ -620,7 +620,7 @@ SV_StartSound.
 ====================
 */
 // the VR reload system hides the game's own reload sounds while you reload by hand
-static qboolean S_VRMuted( int ent, const sfx_t *sfx )
+static qboolean S_VRMuted( int ent, int chan, const sfx_t *sfx )
 {
 	static convar_t *on, *list, *own;
 	const char *p;
@@ -632,12 +632,16 @@ static qboolean S_VRMuted( int ent, const sfx_t *sfx )
 	if( !on || !list || on->value < 0.5f )
 		return false;
 
-	if( ent != cl.playernum + 1 && ent != cl.viewentity )
+	if( ent != cl.playernum + 1 && ent != cl.viewentity && ent != snd.entnum )
 		return false;
 
 	// the sounds we play ourselves are never muted
 	if( own && own->string[0] && Q_stristr( sfx->name, own->string ))
 		return false;
+
+	// while you reload by hand nothing else comes from your weapon or items anyway
+	if( chan == CHAN_WEAPON || chan == CHAN_ITEM )
+		return true;
 
 	p = list->string;
 
@@ -669,7 +673,7 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
 	sfx = S_GetSfxByHandle( handle );
 	if( !sfx ) return;
 
-	if( S_VRMuted( ent, sfx )) return;
+	if( S_VRMuted( ent, chan, sfx )) return;
 
 	vol = bound( 0, fvol * 255, 255 );
 	if( pitch <= 1 ) pitch = PITCH_NORM; // Invasion issues

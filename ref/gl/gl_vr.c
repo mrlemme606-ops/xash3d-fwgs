@@ -127,7 +127,8 @@ static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotat
 static CVAR_DEFINE_AUTO( vr_flip_vfov, "0", FCVAR_ARCHIVE, "diagnostic: swap the up and down field of view. Try 1 if what is drawn sits a little too low or high compared to the menu pointer" );
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.30", FCVAR_ARCHIVE, "meters below your recentered height that count as physically crouching (you stand up again at 60% of this)" );
-static CVAR_DEFINE_AUTO( vr_crouch_comp, "16", FCVAR_ARCHIVE, "how many units the game lowers the view when the character crouches; your own crouch is not counted twice" );
+static CVAR_DEFINE_AUTO( vr_crouch_comp, "34", FCVAR_ARCHIVE, "how many units the game lowers the view when the character crouches; your own crouch is not counted twice" );
+static CVAR_DEFINE_AUTO( vr_sky_models, "1", FCVAR_ARCHIVE, "1 = draw the sky models the maps use (sky_sphere_*.mdl) around you instead of the black sky box" );
 static CVAR_DEFINE_AUTO( vr_hide_crosshair, "1", FCVAR_ARCHIVE, "1 = switch the game's crosshair off (the laser and red cross are your aim)" );
 static CVAR_DEFINE_AUTO( vr_physical_crouch, "1", FCVAR_ARCHIVE, "1 = crouching in real life also crouches the character, so you can get through low gaps" );
 static CVAR_DEFINE_AUTO( vr_use_fbo, "0", 0, "1 = render each eye into its own buffer at SteamVR's recommended size (experimental). 0 = render in the window and copy" );
@@ -308,6 +309,7 @@ static void VR_Recenter_f( void )
 }
 
 static void VR_SkyInfo_f( void );
+static void VR_ViewEnts_f( void );
 
 static void VR_VisualsOff_f( void )
 {
@@ -374,6 +376,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_lh_cut_yaw );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_cut_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_cut_yaw );
+	gEngfuncs.Cmd_AddCommand( "vr_vm_ents", VR_ViewEnts_f, "hold a weapon that is not part of your body (branch, camera) and run this: lists the models near your hand" );
 	gEngfuncs.Cmd_AddCommand( "vr_skyinfo", VR_SkyInfo_f, "print the sky the map asks for and any sky model entities, to work out how the map draws its sky" );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_distance );
@@ -387,6 +390,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_height );
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_comp );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hide_crosshair );
+	gEngfuncs.Cvar_RegisterVariable( &vr_sky_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_finish );
 	gEngfuncs.Cvar_RegisterVariable( &vr_render_scale );
@@ -910,6 +914,11 @@ static void VR_Center_f( void )
 	gEngfuncs.Con_Printf( "VR: centering the weapon in your hand (run vr_weapon_save afterwards to keep it)\n" );
 }
 
+qboolean VR_SkyModelsOn( void )
+{
+	return vr_sky_models.value != 0.0f;
+}
+
 qboolean VR_CenterWanted( void )
 {
 	return vr_center_wanted;
@@ -1431,6 +1440,37 @@ static void VR_TrackCamera( const ref_viewpass_t *game )
 	}
 
 	vr_cam_have = true;
+}
+
+// vr_vm_ents: hold the branch or the camera and run this. lists every model near your hand
+static void VR_ViewEnts_f( void )
+{
+	int i, n;
+
+	if( !tr.draw_list || !vr.hand[1].valid )
+		return;
+
+	n = tr.draw_list->num_solid_entities + tr.draw_list->num_trans_entities;
+	gEngfuncs.Con_Printf( "viewmodel entity: %s\n", tr.viewent && tr.viewent->model ? tr.viewent->model->name : "(none)" );
+
+	for( i = 0; i < n; i++ )
+	{
+		cl_entity_t *e = i < tr.draw_list->num_solid_entities ? tr.draw_list->solid_entities[i]
+			: tr.draw_list->trans_entities[i - tr.draw_list->num_solid_entities];
+		vec3_t d;
+
+		if( !e || !e->model || e->model->type != mod_studio )
+			continue;
+
+		VectorSubtract( e->origin, vr.hand[1].pos, d );
+
+		if( VectorLength( d ) > 120.0f )
+			continue;
+
+		gEngfuncs.Con_Printf( "  %s: ent %d, %.0f units from your hand, movetype %d, aiment %d, scale %.2f, rendermode %d, renderfx %d, seq %d\n",
+			e->model->name, e->index, VectorLength( d ), e->curstate.movetype, e->curstate.aiment, e->curstate.scale,
+			e->curstate.rendermode, e->curstate.renderfx, e->curstate.sequence );
+	}
 }
 
 // vr_skyinfo: which sky does the map ask for, and which sky models are in the scene?
