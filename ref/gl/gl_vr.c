@@ -128,7 +128,8 @@ static CVAR_DEFINE_AUTO( vr_flip_vfov, "0", FCVAR_ARCHIVE, "diagnostic: swap the
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.30", FCVAR_ARCHIVE, "meters below your recentered height that count as physically crouching (you stand up again at 60% of this)" );
 static CVAR_DEFINE_AUTO( vr_crouch_comp, "34", FCVAR_ARCHIVE, "how many units the game lowers the view when the character crouches; your own crouch is not counted twice" );
-static CVAR_DEFINE_AUTO( vr_sky_models, "1", FCVAR_ARCHIVE, "1 = draw the sky models the maps use (sky_sphere_*.mdl) around you instead of the black sky box" );
+static CVAR_DEFINE_AUTO( vr_nofreeze_models, "camera+branch", 0, "weapons that are never held in the idle pose (their own animation is used): part of the file name, + between names" );
+static CVAR_DEFINE_AUTO( vr_sky_models, "0", 0, "1 = draw the sky models the maps use (sky_sphere_*.mdl) around you instead of the black sky box" );
 static CVAR_DEFINE_AUTO( vr_hide_crosshair, "1", FCVAR_ARCHIVE, "1 = switch the game's crosshair off (the laser and red cross are your aim)" );
 static CVAR_DEFINE_AUTO( vr_physical_crouch, "1", FCVAR_ARCHIVE, "1 = crouching in real life also crouches the character, so you can get through low gaps" );
 static CVAR_DEFINE_AUTO( vr_use_fbo, "0", 0, "1 = render each eye into its own buffer at SteamVR's recommended size (experimental). 0 = render in the window and copy" );
@@ -391,6 +392,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_comp );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hide_crosshair );
 	gEngfuncs.Cvar_RegisterVariable( &vr_sky_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_nofreeze_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_finish );
 	gEngfuncs.Cvar_RegisterVariable( &vr_render_scale );
@@ -608,6 +610,7 @@ static void VR_UpdateHands( const ref_viewpass_t *game )
 static vec3_t vr_aim_target;
 static qboolean vr_aim_hit;	// the hand ray hit something, vr_aim_target is that point
 static qboolean vr_vm_omni, vr_vm_flare;	// flare or lantern in hand
+static qboolean vr_vm_nofreeze;	// never held in the idle pose, whatever the lists say (camera, branch)
 static qboolean vr_vm_static;	// the weapon in hand never animates (phone, syringe)
 static qboolean vr_vm_light;	// the weapon in hand is a flashlight (the phone)
 static qboolean vr_vm_melee;	// the weapon in hand is swung by hand
@@ -723,6 +726,12 @@ static void VR_PublishAim( const ref_viewpass_t *game )
 	}
 
 	VectorCopy( target, vr_aim_target );
+
+	gEngfuncs.Cvar_SetValue( "vr_in_hit_x", target[0] );
+	gEngfuncs.Cvar_SetValue( "vr_in_hit_y", target[1] );
+	gEngfuncs.Cvar_SetValue( "vr_in_hit_z", target[2] );
+	gEngfuncs.Cvar_SetValue( "vr_in_hit_ok", ( vr_aim_hit && vr_dbg_ent == 0 ) ? 1.0f : 0.0f );
+
 	VR_AimAngles( eye, target, game->viewangles[YAW], &pitch, &yaw );
 
 	gEngfuncs.Cvar_SetValue( "vr_in_hand_pitch", pitch );
@@ -813,6 +822,22 @@ The weapon model (viewmodel) is drawn where the right hand is. Called by the ren
 The model's origin is around the player's eye, so shift it by where the hand grips the model.
 =================
 */
+// turn v around the unit axis by this many degrees (right hand rule)
+static void VR_RotateAxis( vec3_t v, const vec3_t axis, float degrees )
+{
+	float c = cos( DEG2RAD( degrees )), s = sin( DEG2RAD( degrees ));
+	vec3_t cr, out;
+
+	if( degrees == 0.0f )
+		return;
+
+	CrossProduct( axis, v, cr );
+	VectorScale( v, c, out );
+	VectorMA( out, s, cr, out );
+	VectorMA( out, DotProduct( axis, v ) * ( 1.0f - c ), axis, out );
+	VectorCopy( out, v );
+}
+
 // two hands on a long gun: it points from the right hand to the left hand. returns the gun's axes
 static qboolean VR_TwoHandBasis( vec3_t f, vec3_t l, vec3_t u )
 {
@@ -884,6 +909,22 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 	VectorScale( bu, gz, shift );
 	VectorSubtract( origin, shift, origin );
 
+	// the weapon's own yaw / pitch / roll are turned in the hand's own axes (adding them to world angles goes
+	// wild when the hand is tilted): yaw around the hand's up, then pitch around its side, then roll along it
+	VR_RotateAxis( bf, bu, vr_vm_yaw.value + ry );
+	VR_RotateAxis( bl, bu, vr_vm_yaw.value + ry );
+	VR_RotateAxis( bf, bl, vr_vm_pitch.value + rp );
+	VR_RotateAxis( bu, bl, vr_vm_pitch.value + rp );
+	{
+		float rolloff = vr_vm_roll.value + rr;
+
+		if( vr_vm_flip_roll.value )
+			rolloff = -rolloff;
+
+		VR_RotateAxis( bl, bf, rolloff );
+		VR_RotateAxis( bu, bf, rolloff );
+	}
+
 	xy = sqrt( bf[0] * bf[0] + bf[1] * bf[1] );
 	pitch = RAD2DEG( atan2( -bf[2], xy ));
 	yaw = RAD2DEG( atan2( bf[1], bf[0] ));
@@ -893,9 +934,9 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 		roll = -roll;
 
 	// the game stores the viewmodel's pitch negated, the studio renderer undoes that
-	angles[PITCH] = -( pitch + vr_vm_pitch.value + rp );
-	angles[YAW] = yaw + vr_vm_yaw.value + ry;
-	angles[ROLL] = roll + vr_vm_roll.value + rr;
+	angles[PITCH] = -pitch;
+	angles[YAW] = yaw;
+	angles[ROLL] = roll;
 	return true;
 }
 
@@ -1193,6 +1234,9 @@ qboolean VR_ViewModelFrozen( void )
 		whip = gEngfuncs.pfnGetCvarPointer( "vr_in_whip" );
 
 	// melee weapons, and any weapon while you pistol whip: your own arm does the swinging
+	if( vr_vm_nofreeze )
+		return whip && whip->value > 0.5f;
+
 	return ( vr_vm_melee && vr_melee_freeze.value ) || vr_vm_static || ( whip && whip->value > 0.5f );
 }
 
@@ -1387,6 +1431,7 @@ static void VR_UpdateWeaponProfile( void )
 		vr_vm_melee = VR_ListMatches( vr_melee_models.string, base, true );
 		vr_vm_light = VR_ListMatches( vr_light_models.string, base, true );
 		vr_vm_static = VR_ListMatches( vr_static_models.string, base, true );
+		vr_vm_nofreeze = VR_ListMatches( vr_nofreeze_models.string, base, true );
 		vr_vm_omni = VR_ListMatches( vr_omni_models.string, base, true );
 		vr_vm_flare = VR_ContainsNoCase( base, "flare" );
 		gEngfuncs.Cvar_SetValue( "vr_in_melee", vr_vm_melee ? 1.0f : 0.0f );

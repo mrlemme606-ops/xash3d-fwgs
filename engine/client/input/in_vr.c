@@ -19,6 +19,7 @@ key presses and the mouse cursor for menus.
 #include "keydefs.h"
 #include "platform/platform.h"
 #include "vgui_draw.h"
+#include "cl_tent.h"
 
 // published by the renderer each frame, not meant to be set by hand
 static CVAR_DEFINE_AUTO( vr_in_active, "0", 0, "(internal) VR controllers are active" );
@@ -51,6 +52,11 @@ static CVAR_DEFINE_AUTO( vr_in_dir_yaw, "0", 0, "(internal) yaw of the direction
 static CVAR_DEFINE_AUTO( vr_in_dir_pitch, "0", 0, "(internal) pitch of the direction the right hand points" );
 static CVAR_DEFINE_AUTO( vr_in_crouch, "0", 0, "(internal) physically crouching" );
 static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
+static CVAR_DEFINE_AUTO( vr_in_hit_x, "0", 0, "(internal) where the hand ray hit the world" );
+static CVAR_DEFINE_AUTO( vr_in_hit_y, "0", 0, "(internal)" );
+static CVAR_DEFINE_AUTO( vr_in_hit_z, "0", 0, "(internal)" );
+static CVAR_DEFINE_AUTO( vr_in_hit_ok, "0", 0, "(internal) the hand ray hits the world" );
+static CVAR_DEFINE_AUTO( vr_bullet_holes, "1", FCVAR_ARCHIVE, "1 = a bullet hole appears where the hand ray hits when you fire a gun (to see where you aim)" );
 static CVAR_DEFINE_AUTO( vr_in_mask, "0", 0, "(internal) buttons the reload system keeps away from the game" );
 static CVAR_DEFINE_AUTO( vr_in_noswing, "0", 0, "(internal) no melee swings right now (reloading)" );
 static CVAR_DEFINE_AUTO( vr_in_reload, "0", 0, "(internal) the reload system finished a manual reload: press the reload key" );
@@ -214,6 +220,11 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_crouch );
 	Cvar_RegisterVariable( &vr_in_buttons );
 	Cvar_RegisterVariable( &vr_in_mask );
+	Cvar_RegisterVariable( &vr_in_hit_x );
+	Cvar_RegisterVariable( &vr_in_hit_y );
+	Cvar_RegisterVariable( &vr_in_hit_z );
+	Cvar_RegisterVariable( &vr_in_hit_ok );
+	Cvar_RegisterVariable( &vr_bullet_holes );
 	Cvar_RegisterVariable( &vr_in_noswing );
 	Cvar_RegisterVariable( &vr_in_reload );
 	Cvar_RegisterVariable( &vr_turn_mode );
@@ -479,6 +490,21 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		mode = 0;
 		aim_rel = 0.0f;
 		aim_pitch = 0.0f;
+	}
+
+	// a bullet hole where the hand ray hits the world, so you can see where you are aiming
+	if( in_game && vr_bullet_holes.value && vr_in_hit_ok.value > 0.5f && vr_in_melee.value < 0.5f
+		&& FBitSet( buttons & ~vr_prev_buttons, BIT( VRB_RTRIGGER )))
+	{
+		char name[16];
+		vec3_t pos = { vr_in_hit_x.value, vr_in_hit_y.value, vr_in_hit_z.value };
+		int id;
+
+		Q_snprintf( name, sizeof( name ), "{shot%d", COM_RandomLong( 1, 5 ));
+		id = CL_DecalIndexFromName( name );
+
+		if( id )
+			CL_DecalShoot( CL_DecalIndex( id ), 0, 0, pos, 0 );
 	}
 
 	if( Cvar_VariableValue( "vr_aim_debug" ) > 0.0f && (( buttons & ~vr_prev_buttons ) & ( BIT( VRB_RTRIGGER ) | BIT( VRB_RGRIP ))))

@@ -845,6 +845,20 @@ void VR_ReloadTick( void )
 	}
 
 	// the game may be doing a reload on its own (an empty gun, a keyboard key): hold the pose still for it
+	// the game plays a different reload animation when the gun was empty: that tells us even if the shooting
+	// animations of this gun have no telltale name
+	if(( rl.state == RL_NOMAG || rl.state == RL_HOLDMAG ) && RL_LabelHas( rl.obs, "reload" ) && !rl.was_empty
+		&& ( RL_LabelHas( rl.obs, "noshot" ) || RL_LabelHas( rl.obs, "empty" ) || RL_LabelHas( rl.obs, "dry" ) || RL_LabelHas( rl.obs, "nomag" )))
+	{
+		rl.was_empty = true;
+
+		if( rl.def->rule == RULE_LOCKED )
+			rl.bolt_off = RL_Travel();
+
+		if( vr_rl_debug.value )
+			gEngfuncs.Con_Printf( "VR reload: the game's reload animation '%s' says the gun was empty\n", rl.obs );
+	}
+
 	if( rl.state == RL_READY && gp_cl->time > rl.ignore_until && RL_LabelHas( rl.obs, "reload" ))
 	{
 		rl.twohand = false;
