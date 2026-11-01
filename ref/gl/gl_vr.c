@@ -651,10 +651,12 @@ static qboolean VR_TraceRay( const vec3_t start, const vec3_t dir, float dist, c
 // the game aims, uses and shoots along angles we send it. The server fires from the player's own eye,
 // so work out the angles from there to the point the hand ray hits (or far along the ray if it hits nothing).
 // Also: how fast the hand swings and where, for melee.
+static qboolean VR_TwoHandBasis( vec3_t f, vec3_t l, vec3_t u );
+
 static void VR_PublishAim( const ref_viewpass_t *game )
 {
 	float d = game->viewangles[YAW] - vr.ref_yaw;
-	vec3_t eye, target, tmp, swing_dir, swing_target;
+	vec3_t eye, target, tmp, swing_dir, swing_target, aimdir;
 	float pitch, yaw, speed = 0.0f;
 	uint32_t dev;
 
@@ -669,13 +671,21 @@ static void VR_PublishAim( const ref_viewpass_t *game )
 
 	VectorCopy( game->vieworigin, eye );
 
+	{
+		vec3_t tf, tl, tu;
+
+		if( VR_TwoHandBasis( tf, tl, tu ))
+			VectorCopy( tf, aimdir );
+		else VectorCopy( vr.hand[1].fwd, aimdir );
+	}
+
 	if( vr_aim_trace.value )
 	{
-		vr_aim_hit = VR_TraceRay( vr.hand[1].pos, vr.hand[1].fwd, 8192.0f, eye, target );
+		vr_aim_hit = VR_TraceRay( vr.hand[1].pos, aimdir, 8192.0f, eye, target );
 	}
 	else
 	{
-		VectorScale( vr.hand[1].fwd, vr_aim_converge.value, tmp );
+		VectorScale( aimdir, vr_aim_converge.value, tmp );
 		VectorAdd( vr.hand[1].pos, tmp, target );
 	}
 
@@ -770,11 +780,41 @@ The weapon model (viewmodel) is drawn where the right hand is. Called by the ren
 The model's origin is around the player's eye, so shift it by where the hand grips the model.
 =================
 */
+// two hands on a long gun: it points from the right hand to the left hand. returns the gun's axes
+static qboolean VR_TwoHandBasis( vec3_t f, vec3_t l, vec3_t u )
+{
+	vec3_t d;
+	float len;
+
+	if( !VR_ReloadTwoHandAim() || !vr.hand[0].valid || !vr.hand[1].valid )
+		return false;
+
+	VectorSubtract( vr.hand[0].pos, vr.hand[1].pos, d );
+	len = VectorLength( d );
+
+	if( len < 6.0f )
+		return false;
+
+	VectorScale( d, 1.0f / len, f );
+
+	// keep the right hand's roll: its up direction, made square with the new barrel direction
+	VectorMA( vr.hand[1].up, -DotProduct( vr.hand[1].up, f ), f, u );
+
+	if( VectorLength( u ) < 0.1f )
+		return false;
+
+	VectorNormalize( u );
+	CrossProduct( u, f, l );
+	VectorNormalize( l );
+	return true;
+}
+
 qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 {
 	vec3_t shift;
 	float xy, pitch, yaw, roll;
 	float gx, gy, gz, rp, ry, rr;
+	vec3_t bf, bl, bu;
 
 	vr.vm_asked++;
 	VR_UpdateWeaponProfile();
@@ -794,20 +834,27 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 		rp = rlo[3]; ry = rlo[4]; rr = rlo[5];
 	}
 
-	VectorScale( vr.hand[1].fwd, gx, shift );
+	if( !VR_TwoHandBasis( bf, bl, bu ))
+	{
+		VectorCopy( vr.hand[1].fwd, bf );
+		VectorCopy( vr.hand[1].left, bl );
+		VectorCopy( vr.hand[1].up, bu );
+	}
+
+	VectorScale( bf, gx, shift );
 	origin[0] = vr.hand[1].pos[0] - shift[0];
 	origin[1] = vr.hand[1].pos[1] - shift[1];
 	origin[2] = vr.hand[1].pos[2] - shift[2];
 
-	VectorScale( vr.hand[1].left, gy, shift );
+	VectorScale( bl, gy, shift );
 	VectorSubtract( origin, shift, origin );
-	VectorScale( vr.hand[1].up, gz, shift );
+	VectorScale( bu, gz, shift );
 	VectorSubtract( origin, shift, origin );
 
-	xy = sqrt( vr.hand[1].fwd[0] * vr.hand[1].fwd[0] + vr.hand[1].fwd[1] * vr.hand[1].fwd[1] );
-	pitch = RAD2DEG( atan2( -vr.hand[1].fwd[2], xy ));
-	yaw = RAD2DEG( atan2( vr.hand[1].fwd[1], vr.hand[1].fwd[0] ));
-	roll = RAD2DEG( atan2( vr.hand[1].left[2], vr.hand[1].up[2] ));
+	xy = sqrt( bf[0] * bf[0] + bf[1] * bf[1] );
+	pitch = RAD2DEG( atan2( -bf[2], xy ));
+	yaw = RAD2DEG( atan2( bf[1], bf[0] ));
+	roll = RAD2DEG( atan2( bl[2], bu[2] ));
 
 	if( vr_vm_flip_roll.value )
 		roll = -roll;

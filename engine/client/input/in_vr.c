@@ -355,7 +355,8 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	qboolean in_game, on_ladder, digital;
 
 	{
-		float menu = cls.key_dest != key_game ? 1.0f : 0.0f;
+		// the game's own inventory / save screens keep key_game but show a mouse cursor
+		float menu = ( cls.key_dest != key_game || host.mouse_visible ) ? 1.0f : 0.0f;
 
 		if( vr_in_menu.value != menu )
 			Cvar_DirectSetValue( &vr_in_menu, menu );

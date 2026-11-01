@@ -89,6 +89,7 @@ qboolean VR_ReloadBoneHidden( qboolean left_pass, const char *bonename, qboolean
 qboolean VR_ReloadIsBoltBone( const char *bonename );
 qboolean VR_ReloadBoltOffset( float off[3] );
 qboolean VR_ReloadWantsIdle( void );
+qboolean VR_ReloadTwoHandAim( void );
 const float *VR_ReloadRightOffsets( void );
 qboolean VR_ReloadLeftDraw( vr_rl_left_t *d );
 
