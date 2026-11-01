@@ -619,6 +619,44 @@ it will never be restarted.  Use StartStaticSound (pass CHAN_STATIC to EMIT_SOUN
 SV_StartSound.
 ====================
 */
+// the VR reload system hides the game's own reload sounds while you reload by hand
+static qboolean S_VRMuted( int ent, const sfx_t *sfx )
+{
+	static convar_t *on, *list, *own;
+	const char *p;
+
+	if( !on ) on = Cvar_FindVar( "vr_rl_mute_on" );
+	if( !list ) list = Cvar_FindVar( "vr_rl_mute" );
+	if( !own ) own = Cvar_FindVar( "vr_rl_ownsound" );
+
+	if( !on || !list || on->value < 0.5f )
+		return false;
+
+	if( ent != cl.playernum + 1 && ent != cl.viewentity )
+		return false;
+
+	// the sounds we play ourselves are never muted
+	if( own && own->string[0] && Q_stristr( sfx->name, own->string ))
+		return false;
+
+	p = list->string;
+
+	while( *p )
+	{
+		char tok[48];
+		int n = 0;
+
+		while( *p == '+' || *p == ' ' ) p++;
+		while( *p && *p != '+' && n < 47 ) tok[n++] = *p++;
+		tok[n] = 0;
+
+		if( n && Q_stristr( sfx->name, tok ))
+			return true;
+	}
+
+	return false;
+}
+
 void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fvol, float attn, int pitch, int flags )
 {
 	wavdata_t	*pSource;
@@ -630,6 +668,8 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
 	if( !snd.initialized ) return;
 	sfx = S_GetSfxByHandle( handle );
 	if( !sfx ) return;
+
+	if( S_VRMuted( ent, sfx )) return;
 
 	vol = bound( 0, fvol * 255, 255 );
 	if( pitch <= 1 ) pitch = PITCH_NORM; // Invasion issues

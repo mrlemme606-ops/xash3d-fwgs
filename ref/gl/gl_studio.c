@@ -2000,6 +2000,7 @@ static void R_VRAdjustBones( void )
 	if( !r_vr_viewmodel || RI.currententity != tr.viewent )
 		return;
 
+	VR_CenterFinish();
 	VR_ReloadZoneFlush();
 
 	if( !VR_ReloadBoltOffset( off ))
@@ -2125,6 +2126,21 @@ static void R_StudioDrawPoints( void )
 
 		for( int b = 0; b < nb; b++ )
 			bonehide[b] = VR_ViewModelBoneHidden( vrbones[b].name );
+
+		// vr_vm_center: the middle of the weapon (not the arms)
+		if( RI.currententity == tr.viewent && VR_CenterWanted( ))
+		{
+			byte arm[MAXSTUDIOBONES];
+
+			for( int b = 0; b < nb; b++ )
+				arm[b] = bonehide[b] || !Q_strnicmp( vrbones[b].name, "r_", 2 ) || !Q_strnicmp( vrbones[b].name, "l_", 2 );
+
+			for( int i = 0; i < numverts; i++ )
+			{
+				if( pvertbone[i] < nb && !arm[pvertbone[i]] )
+					VR_CenterAccum( g_studio.verts[i] );
+			}
+		}
 
 		// the manual reload system wants to know where the magazine and the slide really are
 		if( RI.currententity == tr.viewent )

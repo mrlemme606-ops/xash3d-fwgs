@@ -90,6 +90,9 @@ qboolean VR_ReloadIsBoltBone( const char *bonename );
 qboolean VR_ReloadBoltOffset( float off[3] );
 qboolean VR_ReloadWantsIdle( void );
 qboolean VR_ReloadTwoHandAim( void );
+qboolean VR_CenterWanted( void );
+void VR_CenterAccum( const float *p );
+void VR_CenterFinish( void );
 const float *VR_ReloadRightOffsets( void );
 qboolean VR_ReloadLeftDraw( vr_rl_left_t *d );
 

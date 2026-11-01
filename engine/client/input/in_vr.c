@@ -461,8 +461,9 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			aim_pitch = vr_in_hand_pitch.value;
 		}
 	}
-	else if( vr_in_hand_valid.value > 0.5f && ( mode >= 3 || ( mode == 2 && host.realtime < vr_hand_aim_until )))
+	else if( vr_in_hand_valid.value > 0.5f && ( mode >= 3 || host.realtime < vr_hand_aim_until ))
 	{
+		// shooting always aims with the hand, whatever vr_aim_mode says (0 = body used to send every shot straight ahead)
 		mode = 2;
 		aim_rel = vr_in_hand_yaw.value;
 		aim_pitch = vr_in_hand_pitch.value;

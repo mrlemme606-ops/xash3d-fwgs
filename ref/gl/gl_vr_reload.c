@@ -59,8 +59,8 @@ static const vr_rl_def_t rl_defs[] =
 	{ "v_vp70", 7, 47, 7, 75, "magazine+bullet2+bullet1", "slide", "^l_", 3.0f, RULE_LOCKED, false, true, false, false },
 	{ "v_p345", 5, 30, -1, 0, "p_mag+p_bullets", "p_slide", "^l_", 3.0f, RULE_LOCKED, true, true, false, false },
 	{ "v_g43", 29, 50, 28, 133, "Mag+rounds", "Bolt", "^l_", 3.0f, RULE_LOCKED, false, true, true, false },
-	{ "v_mp5", 3, 55, 3, 15, "bone_mag", "bone_bolt", "^l_+lhand_sleevedummy+upperarm_dummyL", 3.0f, RULE_RACK, false, true, true, true },
-	{ "v_m16", 4, 40, -1, 0, "houseofbullets+bulatz", "cockpuller", "^l_", 2.5f, RULE_RACK, false, true, true, true },
+	{ "v_mp5", 3, 55, 3, 15, "bone_mag", "bone_bolt", "^l_+lhand_sleevedummy+upperarm_dummyL", 3.0f, RULE_RACK, false, true, true, false },
+	{ "v_m16", 4, 40, -1, 0, "houseofbullets+bulatz", "cockpuller", "^l_", 2.5f, RULE_RACK, false, true, true, false },
 	// two-handed grip only, for now
 	{ "v_rifle", -1, 0, -1, 0, "", "", "^l_", 0.0f, RULE_NONE, false, false, true, false },
 	{ "v_shotgun", -1, 0, -1, 0, "", "", "^l_", 0.0f, RULE_NONE, false, false, true, false },
@@ -98,6 +98,9 @@ static CVAR_DEFINE_AUTO( vr_rl_bolt_radius, "7", FCVAR_ARCHIVE, "how close your 
 static CVAR_DEFINE_AUTO( vr_rl_grip_radius, "12", FCVAR_ARCHIVE, "how close your left hand has to be to the gun for the left grip to hold it with two hands" );
 static CVAR_DEFINE_AUTO( vr_rl_travel_scale, "1", FCVAR_ARCHIVE, "multiplies how far slides and bolts travel (1 = table value)" );
 static CVAR_DEFINE_AUTO( vr_rl_always_rack, "0", FCVAR_ARCHIVE, "1 = the bolt always has to be worked after a reload, not only when the gun was empty" );
+static CVAR_DEFINE_AUTO( vr_rl_mute, "reload+clip+slide+bolt+rack+cock+charge+chamber+eject+insert+magin+magout", FCVAR_ARCHIVE, "sounds of the player's weapon whose file name contains one of these parts are muted while you reload by hand" );
+static CVAR_DEFINE_AUTO( vr_rl_mute_on, "0", 0, "(internal) the game's reload sounds are muted right now" );
+static CVAR_DEFINE_AUTO( vr_rl_ownsound, "", 0, "(internal) the reload sound we are playing, never muted" );
 static CVAR_DEFINE_AUTO( vr_rl_tune, "-1", 0, "position tuning: 0 = left hand with magazine, 1 = left hand on the bolt, 2 = right hand while reloading. -1 = off. Then change vr_rl_x/y/z/p/yw/r and run vr_rl_save" );
 static CVAR_DEFINE_AUTO( vr_rl_x, "0", 0, "tuning: forward (same directions as vr_vm_grip_x)" );
 static CVAR_DEFINE_AUTO( vr_rl_y, "0", 0, "tuning: left" );
@@ -123,6 +126,9 @@ static struct
 	double		game_start, ignore_until;
 	int		pulse_frames;
 	qboolean	bolt_back_seen;
+	qboolean	mag_clear;	// the hand has left the magazine well since it took the magazine out
+	double		mute_until, eject_time;
+	qboolean	mute_sent;
 	char		snd[RLE_COUNT][64];
 	qboolean	seen_reload;
 	double		unseen_since;
@@ -263,6 +269,7 @@ static void RL_Sound( int ev )
 
 	if( rl.snd[ev][0] )
 	{
+		gEngfuncs.Cvar_Set( "vr_rl_ownsound", rl.snd[ev] );
 		Q_snprintf( cmd, sizeof( cmd ), "play %s\n", rl.snd[ev] );
 		gEngfuncs.Cbuf_AddText( cmd );
 	}
@@ -676,6 +683,10 @@ qboolean VR_ReloadLeftDraw( vr_rl_left_t *d )
 // the manual part is done (or cancelled). if the game is still busy with its own reload we keep the pose until it is done
 static void RL_Finish( void )
 {
+	if( vr_rl_debug.value )
+		gEngfuncs.Con_Printf( "VR reload: manual part took %.1f s, the game's own reload is %s\n", gp_cl->time - rl.eject_time,
+			RL_LabelHas( rl.obs, "reload" ) ? "still running (that is the wait you feel)" : "already done" );
+
 	rl.bolt_off = 0.0f;
 	rl.fun_bolt = false;
 	rl.unseen_since = 0.0;
@@ -706,6 +717,8 @@ static void RL_Eject( qboolean empty_now, rl_state_t next )
 	rl.was_empty = empty_now || vr_rl_always_rack.value || rl.def->force_rack;
 	rl.bolt_off = ( rl.was_empty && rl.def->rule == RULE_LOCKED ) ? RL_Travel() : 0.0f;
 	rl.bolt_back_seen = false;
+	rl.mag_clear = false;
+	rl.eject_time = gp_cl->time;
 	RL_StartGameReload();
 	RL_Sound( RLE_EJECT );
 	RL_SetState( next );
@@ -750,6 +763,13 @@ void VR_ReloadTick( void )
 
 		rl.twohand = false;
 		rl.bolt_off = 0.0f;
+
+		if( rl.mute_sent )
+		{
+			rl.mute_sent = false;
+			gEngfuncs.Cvar_SetValue( "vr_rl_mute_on", 0.0f );
+		}
+
 		gEngfuncs.Cvar_SetValue( "vr_in_mask", 0.0f );
 		gEngfuncs.Cvar_SetValue( "vr_in_noswing", 0.0f );
 		return;
@@ -761,7 +781,7 @@ void VR_ReloadTick( void )
 		return;
 	}
 
-	empty_now = RL_LabelHas( rl.obs, "noshot" ) || RL_LabelHas( rl.obs, "empty" );
+	empty_now = RL_LabelHas( rl.obs, "noshot" ) || RL_LabelHas( rl.obs, "empty" ) || RL_LabelHas( rl.obs, "dry" ) || RL_LabelHas( rl.obs, "nomag" );
 
 	// two hands on the gun
 	VectorMA( rl.gun_org, 6.0f, rl.gun_fwd, grip_pt );
@@ -863,15 +883,9 @@ void VR_ReloadTick( void )
 		break;
 
 	case RL_NOMAG:
-		if( pressed & ( 1 << RLB_B ))
-		{
-			// put the old magazine back
-			RL_Finish();
-			break;
-		}
-
 		if(( pressed & ( 1 << RLB_LTRIGGER )) && RL_Dist( lpos, pouch ) < vr_rl_pouch_radius.value )
 		{
+			rl.mag_clear = true;
 			RL_Sound( RLE_MAGGRAB );
 			RL_SetState( RL_HOLDMAG );
 		}
@@ -882,11 +896,12 @@ void VR_ReloadTick( void )
 		qboolean holding = ( buttons & ( 1 << RLB_LTRIGGER )) != 0;
 		qboolean inside = rl.zone_have[RLZ_MAG] && RL_Dist( lpos, rl.zone[RLZ_MAG] ) < vr_rl_mag_radius.value;
 
-		if( pressed & ( 1 << RLB_B ))
-		{
-			RL_Finish();
-			break;
-		}
+		// a magazine you just pulled out of the gun can only go back in after your hand has left the magazine well
+		if( !rl.mag_clear && ( !rl.zone_have[RLZ_MAG] || RL_Dist( lpos, rl.zone[RLZ_MAG] ) > vr_rl_mag_radius.value * 1.6f ))
+			rl.mag_clear = true;
+
+		if( !rl.mag_clear )
+			inside = false;
 
 		if( inside && ( holding || ( released & ( 1 << RLB_LTRIGGER ))))
 		{
@@ -912,9 +927,9 @@ void VR_ReloadTick( void )
 	}
 
 	case RL_MAGIN:
-		if( pressed & ( 1 << RLB_B ))
+		if( rl.def->eject_finishes && ( pressed & ( 1 << RLB_B )))
 		{
-			// the Ruger: the eject button lets the slide go. on the others it just finishes the job
+			// the Ruger: the eject button lets the slide go
 			RL_Sound( RLE_BOLTFWD );
 			RL_Finish();
 			break;
@@ -992,6 +1007,20 @@ void VR_ReloadTick( void )
 		break;
 	}
 
+	// the game's own reload sounds are hidden while we are busy, and for a moment after
+	if( rl.state != RL_READY )
+		rl.mute_until = gp_cl->time + 0.6;
+
+	{
+		qboolean mute = gp_cl->time < rl.mute_until;
+
+		if( mute != rl.mute_sent )
+		{
+			rl.mute_sent = mute;
+			gEngfuncs.Cvar_SetValue( "vr_rl_mute_on", mute ? 1.0f : 0.0f );
+		}
+	}
+
 	// what the game must not see
 	if( rl.state == RL_READY )
 	{
@@ -1033,6 +1062,9 @@ void VR_ReloadInitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_grip_radius );
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_travel_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_always_rack );
+	gEngfuncs.Cvar_RegisterVariable( &vr_rl_mute );
+	gEngfuncs.Cvar_RegisterVariable( &vr_rl_mute_on );
+	gEngfuncs.Cvar_RegisterVariable( &vr_rl_ownsound );
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_tune );
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_x );
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_y );

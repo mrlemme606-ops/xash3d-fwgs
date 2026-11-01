@@ -126,8 +126,10 @@ static CVAR_DEFINE_AUTO( vr_flip_roll, "0", 0, "set to 1 if head roll is inverte
 static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotation only), useful for diagnosing warping" );
 static CVAR_DEFINE_AUTO( vr_flip_vfov, "0", FCVAR_ARCHIVE, "diagnostic: swap the up and down field of view. Try 1 if what is drawn sits a little too low or high compared to the menu pointer" );
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
-static CVAR_DEFINE_AUTO( vr_crouch_height, "0.35", 0, "meters below your recentered height that count as physically crouching" );
-static CVAR_DEFINE_AUTO( vr_physical_crouch, "0", 0, "1 = crouching in real life also crouches the character (the view then drops twice, see notes)" );
+static CVAR_DEFINE_AUTO( vr_crouch_height, "0.30", FCVAR_ARCHIVE, "meters below your recentered height that count as physically crouching (you stand up again at 60% of this)" );
+static CVAR_DEFINE_AUTO( vr_crouch_comp, "16", FCVAR_ARCHIVE, "how many units the game lowers the view when the character crouches; your own crouch is not counted twice" );
+static CVAR_DEFINE_AUTO( vr_hide_crosshair, "1", FCVAR_ARCHIVE, "1 = switch the game's crosshair off (the laser and red cross are your aim)" );
+static CVAR_DEFINE_AUTO( vr_physical_crouch, "1", FCVAR_ARCHIVE, "1 = crouching in real life also crouches the character, so you can get through low gaps" );
 static CVAR_DEFINE_AUTO( vr_use_fbo, "0", 0, "1 = render each eye into its own buffer at SteamVR's recommended size (experimental). 0 = render in the window and copy" );
 static CVAR_DEFINE_AUTO( vr_render_scale, "1.0", 0, "eye image size relative to what SteamVR recommends (needs a new map load or vid_restart to change)" );
 static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting the eye images (matches Valve's sample)" );
@@ -222,6 +224,8 @@ static struct
 	float		ref_yaw;	// head yaw when recentered (degrees)
 
 	vec3_t		head_pos;	// current head position, OpenVR axes, meters
+	qboolean	crouching;	// physically crouching (with hysteresis)
+	float		crouch_comp;	// units added to the eye height so the game's own crouch is not counted twice
 	vec3_t		head_game;	// current head position in the game world, units
 	float		head_game_yaw;	// current head yaw in the game world, degrees
 	vec3_t		axis_fwd, axis_left, axis_up;	// current head basis in game axes (unrotated)
@@ -258,6 +262,8 @@ static struct
 static void VR_EnsureEyeTargets( void );
 static void VR_UpdateWeaponProfile( void );
 static void VR_WeaponSave_f( void );
+static void VR_Center_f( void );
+static void VR_HideCrosshair( void );
 
 /*
 =================
@@ -379,6 +385,8 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_roll );
 	gEngfuncs.Cvar_RegisterVariable( &vr_testscene );
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_height );
+	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_comp );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hide_crosshair );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_finish );
 	gEngfuncs.Cvar_RegisterVariable( &vr_render_scale );
@@ -392,6 +400,7 @@ void VR_InitCvars( void )
 	VR_InputInitCvars();
 	VR_ReloadInitCvars();
 	VR_UIInitCvars();
+	gEngfuncs.Cmd_AddCommand( "vr_vm_center", VR_Center_f, "put the middle of the weapon in your hand. vr_vm_center <size> also sizes it (size = length in units)" );
 	gEngfuncs.Cmd_AddCommand( "vr_weapon_save", VR_WeaponSave_f, "save the current weapon position/size settings for the weapon you are holding" );
 	gEngfuncs.Cmd_AddCommand( "vr_recenter", VR_Recenter_f, "recenter the VR view on the current head position and direction" );
 }
@@ -540,6 +549,7 @@ static void VR_UpdateHands( const ref_viewpass_t *game )
 
 		VR_ConvPos( vr.head_pos, hp );
 		VectorSubtract( hp, vr.ref_pos, hp );
+		hp[2] += vr.crouch_comp;
 		VR_RotateZ( hp, d, hp );
 		VectorAdd( game->vieworigin, hp, vr.head_game );
 		VR_RotateZ( vr.axis_fwd, d, hf );
@@ -576,6 +586,7 @@ static void VR_UpdateHands( const ref_viewpass_t *game )
 
 		VR_ConvPos( p, tmp );
 		VectorSubtract( tmp, vr.ref_pos, tmp );
+		tmp[2] += vr.crouch_comp;
 		VR_RotateZ( tmp, d, tmp );
 		VectorAdd( game->vieworigin, tmp, vr.hand[h].pos );
 
@@ -652,6 +663,24 @@ static qboolean VR_TraceRay( const vec3_t start, const vec3_t dir, float dist, c
 // so work out the angles from there to the point the hand ray hits (or far along the ray if it hits nothing).
 // Also: how fast the hand swings and where, for melee.
 static qboolean VR_TwoHandBasis( vec3_t f, vec3_t l, vec3_t u );
+
+// the game's crosshair has no place in VR: the laser and the red cross are the aim
+static void VR_HideCrosshair( void )
+{
+	static const char *names[] = { "crosshair", "cl_crosshair", "hud_crosshair" };
+	int i;
+
+	if( !vr_hide_crosshair.value )
+		return;
+
+	for( i = 0; i < 3; i++ )
+	{
+		cvar_t *cv = gEngfuncs.pfnGetCvarPointer( names[i] );
+
+		if( cv && cv->value != 0.0f )
+			gEngfuncs.Cvar_SetValue( names[i], 0.0f );
+	}
+}
 
 static void VR_PublishAim( const ref_viewpass_t *game )
 {
@@ -866,9 +895,81 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 	return true;
 }
 
+// ---- vr_vm_center: put the middle of the weapon in your hand, and optionally size it
+static qboolean vr_center_wanted;
+static float vr_center_fit;
+static vec3_t vr_center_sum, vr_center_min, vr_center_max;
+static int vr_center_n;
+
+static void VR_Center_f( void )
+{
+	vr_center_wanted = true;
+	vr_center_fit = gEngfuncs.Cmd_Argc() > 1 ? Q_atof( gEngfuncs.Cmd_Argv( 1 )) : 0.0f;
+	vr_center_n = 0;
+	VectorClear( vr_center_sum );
+	gEngfuncs.Con_Printf( "VR: centering the weapon in your hand (run vr_weapon_save afterwards to keep it)\n" );
+}
+
+qboolean VR_CenterWanted( void )
+{
+	return vr_center_wanted;
+}
+
+void VR_CenterAccum( const float *p )
+{
+	int i;
+
+	if( !vr_center_n )
+	{
+		VectorCopy( p, vr_center_min );
+		VectorCopy( p, vr_center_max );
+	}
+
+	for( i = 0; i < 3; i++ )
+	{
+		if( p[i] < vr_center_min[i] ) vr_center_min[i] = p[i];
+		if( p[i] > vr_center_max[i] ) vr_center_max[i] = p[i];
+	}
+
+	VectorAdd( vr_center_sum, p, vr_center_sum );
+	vr_center_n++;
+}
+
+void VR_CenterFinish( void )
+{
+	vec3_t c, d, ext;
+	float size;
+
+	if( !vr_center_wanted || vr_center_n < 8 || !vr.hand[1].valid )
+		return;
+
+	VectorScale( vr_center_sum, 1.0f / vr_center_n, c );
+	VectorSubtract( vr.hand[1].pos, c, d );
+
+	gEngfuncs.Cvar_SetValue( "vr_vm_grip_x", vr_vm_grip_x.value - DotProduct( d, vr.hand[1].fwd ));
+	gEngfuncs.Cvar_SetValue( "vr_vm_grip_y", vr_vm_grip_y.value - DotProduct( d, vr.hand[1].left ));
+	gEngfuncs.Cvar_SetValue( "vr_vm_grip_z", vr_vm_grip_z.value - DotProduct( d, vr.hand[1].up ));
+
+	VectorSubtract( vr_center_max, vr_center_min, ext );
+	size = VectorLength( ext );
+
+	if( vr_center_fit > 0.0f && size > 0.1f )
+	{
+		gEngfuncs.Cvar_SetValue( "vr_vm_scale", bound( 0.02f, vr_vm_scale.value * vr_center_fit / size, 4.0f ));
+		gEngfuncs.Con_Printf( "VR: weapon was %.1f units long, scale set. run vr_vm_center again once to re-center it\n", size );
+	}
+	else
+	{
+		gEngfuncs.Con_Printf( "VR: weapon centered (it is %.1f units across). vr_vm_center <size> also resizes it\n", size );
+	}
+
+	vr_center_wanted = false;
+	vr_center_n = 0;
+}
+
 float VR_GetViewModelScale( void )
 {
-	return bound( 0.1f, vr_vm_scale.value, 4.0f );
+	return bound( 0.02f, vr_vm_scale.value, 4.0f );
 }
 
 static qboolean VR_ContainsNoCase( const char *s, const char *frag )
@@ -1501,7 +1602,22 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 		float rel = RAD2DEG( atan2( vr.axis_fwd[1], vr.axis_fwd[0] )) - vr.ref_yaw;
 		float xy = sqrt( vr.axis_fwd[0] * vr.axis_fwd[0] + vr.axis_fwd[1] * vr.axis_fwd[1] );
 		float pitch = RAD2DEG( atan2( -vr.axis_fwd[2], xy ));
-		qboolean crouch = vr_physical_crouch.value && ( vr.head_pos[1] < vr.ref_head_ovr[1] - vr_crouch_height.value );
+		float below = vr.ref_head_ovr[1] - vr.head_pos[1];
+		qboolean crouch;
+		float target, step;
+
+		if( !vr.crouching && below > vr_crouch_height.value )
+			vr.crouching = true;
+		else if( vr.crouching && below < vr_crouch_height.value * 0.6f )
+			vr.crouching = false;
+
+		crouch = vr_physical_crouch.value && vr.crouching;
+
+		// the game lowers its view when the character crouches, as slowly as it likes. we give that height back
+		// so the view follows your real head only
+		target = crouch ? vr_crouch_comp.value : 0.0f;
+		step = vr_crouch_comp.value * bound( 0.001f, (float)gp_host->frametime, 0.1f ) / 0.35f;
+		vr.crouch_comp += bound( -step, target - vr.crouch_comp, step );
 
 		while( rel > 180.0f ) rel -= 360.0f;
 		while( rel < -180.0f ) rel += 360.0f;
@@ -1515,6 +1631,7 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 	VR_UpdateHands( game );
 	VR_PublishAim( game );
 	VR_ReloadTick();
+	VR_HideCrosshair();
 	VR_UpdateHandLight( game );
 	VR_PublishUI();
 
@@ -1686,6 +1803,7 @@ void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 
 	VR_ConvPos( ep, eyepos );
 	VectorSubtract( eyepos, vr.ref_pos, offset );
+	offset[2] += vr.crouch_comp;
 
 	// the mouse/keyboard yaw turns the whole rig; the head only adds to it
 	d = game->viewangles[YAW] - vr.ref_yaw;
