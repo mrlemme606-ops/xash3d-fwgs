@@ -222,6 +222,8 @@ static struct
 	float		ref_yaw;	// head yaw when recentered (degrees)
 
 	vec3_t		head_pos;	// current head position, OpenVR axes, meters
+	vec3_t		head_game;	// current head position in the game world, units
+	float		head_game_yaw;	// current head yaw in the game world, degrees
 	vec3_t		axis_fwd, axis_left, axis_up;	// current head basis in game axes (unrotated)
 
 	float		cur_frustum[4];
@@ -388,6 +390,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_arm_cut );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_dump_tex );
 	VR_InputInitCvars();
+	VR_ReloadInitCvars();
 	VR_UIInitCvars();
 	gEngfuncs.Cmd_AddCommand( "vr_weapon_save", VR_WeaponSave_f, "save the current weapon position/size settings for the weapon you are holding" );
 	gEngfuncs.Cmd_AddCommand( "vr_recenter", VR_Recenter_f, "recenter the VR view on the current head position and direction" );
@@ -531,6 +534,17 @@ static void VR_UpdateHands( const ref_viewpass_t *game )
 	float d = game->viewangles[YAW] - vr.ref_yaw;
 	float th = DEG2RAD( vr_hand_pitch.value ), c = cos( th ), s = sin( th );
 	int h, i;
+
+	{
+		vec3_t hp, hf;
+
+		VR_ConvPos( vr.head_pos, hp );
+		VectorSubtract( hp, vr.ref_pos, hp );
+		VR_RotateZ( hp, d, hp );
+		VectorAdd( game->vieworigin, hp, vr.head_game );
+		VR_RotateZ( vr.axis_fwd, d, hf );
+		vr.head_game_yaw = RAD2DEG( atan2( hf[1], hf[0] ));
+	}
 
 	for( h = 0; h < 2; h++ )
 	{
@@ -760,6 +774,7 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 {
 	vec3_t shift;
 	float xy, pitch, yaw, roll;
+	float gx, gy, gz, rp, ry, rr;
 
 	vr.vm_asked++;
 	VR_UpdateWeaponProfile();
@@ -769,14 +784,24 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 
 	vr.vm_applied++;
 
-	VectorScale( vr.hand[1].fwd, vr_vm_grip_x.value, shift );
+	{
+		// extra offsets while a manual reload is going on (vr_rl_tune 2)
+		const float *rlo = VR_ReloadRightOffsets();
+
+		gx = vr_vm_grip_x.value + rlo[0];
+		gy = vr_vm_grip_y.value + rlo[1];
+		gz = vr_vm_grip_z.value + rlo[2];
+		rp = rlo[3]; ry = rlo[4]; rr = rlo[5];
+	}
+
+	VectorScale( vr.hand[1].fwd, gx, shift );
 	origin[0] = vr.hand[1].pos[0] - shift[0];
 	origin[1] = vr.hand[1].pos[1] - shift[1];
 	origin[2] = vr.hand[1].pos[2] - shift[2];
 
-	VectorScale( vr.hand[1].left, vr_vm_grip_y.value, shift );
+	VectorScale( vr.hand[1].left, gy, shift );
 	VectorSubtract( origin, shift, origin );
-	VectorScale( vr.hand[1].up, vr_vm_grip_z.value, shift );
+	VectorScale( vr.hand[1].up, gz, shift );
 	VectorSubtract( origin, shift, origin );
 
 	xy = sqrt( vr.hand[1].fwd[0] * vr.hand[1].fwd[0] + vr.hand[1].fwd[1] * vr.hand[1].fwd[1] );
@@ -788,9 +813,9 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 		roll = -roll;
 
 	// the game stores the viewmodel's pitch negated, the studio renderer undoes that
-	angles[PITCH] = -( pitch + vr_vm_pitch.value );
-	angles[YAW] = yaw + vr_vm_yaw.value;
-	angles[ROLL] = roll + vr_vm_roll.value;
+	angles[PITCH] = -( pitch + vr_vm_pitch.value + rp );
+	angles[YAW] = yaw + vr_vm_yaw.value + ry;
+	angles[ROLL] = roll + vr_vm_roll.value + rr;
 	return true;
 }
 
@@ -930,7 +955,9 @@ void VR_SetHandPass( qboolean left )
 
 qboolean VR_ViewModelBoneHidden( const char *bonename )
 {
-	return VR_ListMatches( vr_left_pass ? vr_lhand_hide_bones.string : vr_vm_hide_bones.string, bonename, false );
+	qboolean hidden = VR_ListMatches( vr_left_pass ? vr_lhand_hide_bones.string : vr_vm_hide_bones.string, bonename, false );
+
+	return VR_ReloadBoneHidden( vr_left_pass, bonename, hidden );
 }
 
 const char *VR_LeftHandModel( void )
@@ -944,19 +971,23 @@ float VR_GetLeftHandScale( void )
 }
 
 // the universal left hand: the left arm of a viewmodel, at the left controller
-qboolean VR_GetLeftHandPose( vec3_t origin, vec3_t angles )
+qboolean VR_GetLeftHandPoseOfs( vec3_t origin, vec3_t angles, const float *ofs )
 {
 	vec3_t shift;
 	float xy, pitch, yaw, roll;
+	float o[6] = { 0, 0, 0, 0, 0, 0 };
+
+	if( ofs )
+		memcpy( o, ofs, sizeof( o ));
 
 	if( !vr_lhand.value || !vr.in_eye_pass || !vr.hand[0].valid )
 		return false;
 
-	VectorScale( vr.hand[0].fwd, vr_lh_grip_x.value, shift );
+	VectorScale( vr.hand[0].fwd, vr_lh_grip_x.value + o[0], shift );
 	VectorSubtract( vr.hand[0].pos, shift, origin );
-	VectorScale( vr.hand[0].left, vr_lh_grip_y.value, shift );
+	VectorScale( vr.hand[0].left, vr_lh_grip_y.value + o[1], shift );
 	VectorSubtract( origin, shift, origin );
-	VectorScale( vr.hand[0].up, vr_lh_grip_z.value, shift );
+	VectorScale( vr.hand[0].up, vr_lh_grip_z.value + o[2], shift );
 	VectorSubtract( origin, shift, origin );
 
 	xy = sqrt( vr.hand[0].fwd[0] * vr.hand[0].fwd[0] + vr.hand[0].fwd[1] * vr.hand[0].fwd[1] );
@@ -967,10 +998,34 @@ qboolean VR_GetLeftHandPose( vec3_t origin, vec3_t angles )
 	if( vr_lh_flip_roll.value )
 		roll = -roll;
 
-	angles[PITCH] = -( pitch + vr_lh_pitch.value );
-	angles[YAW] = yaw + vr_lh_yaw.value;
-	angles[ROLL] = roll + vr_lh_roll.value;
+	angles[PITCH] = -( pitch + vr_lh_pitch.value + o[3] );
+	angles[YAW] = yaw + vr_lh_yaw.value + o[4];
+	angles[ROLL] = roll + vr_lh_roll.value + o[5];
 	return true;
+}
+
+qboolean VR_GetLeftHandPose( vec3_t origin, vec3_t angles )
+{
+	return VR_GetLeftHandPoseOfs( origin, angles, NULL );
+}
+
+// a controller's position and basis in the game world (game units), for the reload system
+qboolean VR_GetHandBasis( int hand, vec3_t pos, vec3_t fwd, vec3_t left, vec3_t up )
+{
+	if( hand < 0 || hand > 1 || !vr.hand[hand].valid )
+		return false;
+
+	VectorCopy( vr.hand[hand].pos, pos );
+	VectorCopy( vr.hand[hand].fwd, fwd );
+	VectorCopy( vr.hand[hand].left, left );
+	VectorCopy( vr.hand[hand].up, up );
+	return true;
+}
+
+void VR_GetHeadGame( vec3_t pos, float *yaw )
+{
+	VectorCopy( vr.head_game, pos );
+	*yaw = vr.head_game_yaw;
 }
 
 qboolean VR_ViewModelFrozen( void )
@@ -1412,6 +1467,7 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 
 	VR_UpdateHands( game );
 	VR_PublishAim( game );
+	VR_ReloadTick();
 	VR_UpdateHandLight( game );
 	VR_PublishUI();
 

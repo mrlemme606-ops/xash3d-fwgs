@@ -145,6 +145,7 @@ static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
 static qboolean r_vr_viewmodel;	// the weapon is being drawn at the VR hand
 static cl_entity_t vr_lhand_ent;	// the universal left hand
+static float r_vr_lscale;		// > 0: size of the left hand when it is drawn from the weapon model
 
 /*
 ====================
@@ -556,7 +557,7 @@ static void R_StudioSetUpTransform( cl_entity_t *e )
 		if( r_vr_viewmodel && e == tr.viewent )
 			scale = VR_GetViewModelScale();
 		else if( r_vr_viewmodel && e == &vr_lhand_ent )
-			scale = VR_GetLeftHandScale();
+			scale = r_vr_lscale > 0.0f ? r_vr_lscale : VR_GetLeftHandScale();
 
 		Matrix3x4_CreateFromEntity( g_studio.rotationmatrix, angles, origin, scale );
 	}
@@ -1984,6 +1985,72 @@ static void R_StudioSubmitMesh( short *ptricmds, vec3_t *pstudionorms, float s, 
 
 /*
 ===============
+R_VRAdjustBones
+
+The manual reload system moves the slide / bolt of the weapon in your hand by hand. The bones are
+shifted after they were set up, together with everything attached to them.
+===============
+*/
+static void R_VRAdjustBones( void )
+{
+	mstudiobone_t *pbones;
+	float off[3], woff[3];
+	int bolt = -1;
+
+	if( !r_vr_viewmodel || RI.currententity != tr.viewent )
+		return;
+
+	VR_ReloadZoneFlush();
+
+	if( !VR_ReloadBoltOffset( off ))
+		return;
+
+	pbones = (mstudiobone_t *)((byte *)m_pStudioHeader + m_pStudioHeader->boneindex);
+
+	for( int b = 0; b < m_pStudioHeader->numbones; b++ )
+	{
+		if( VR_ReloadIsBoltBone( pbones[b].name ))
+		{
+			bolt = b;
+			break;
+		}
+	}
+
+	if( bolt < 0 )
+		return;
+
+	// model axes -> world, including the weapon scale
+	Matrix3x4_VectorRotate( g_studio.rotationmatrix, off, woff );
+
+	for( int b = 0; b < m_pStudioHeader->numbones; b++ )
+	{
+		int p = b;
+		qboolean under = false;
+
+		while( p >= 0 )
+		{
+			if( p == bolt )
+			{
+				under = true;
+				break;
+			}
+
+			p = pbones[p].parent;
+		}
+
+		if( !under )
+			continue;
+
+		for( int k = 0; k < 3; k++ )
+		{
+			g_studio.bonestransform[b][k][3] += woff[k];
+			g_studio.lighttransform[b][k][3] += woff[k];
+		}
+	}
+}
+
+/*
+===============
 R_StudioDrawPoints
 
 ===============
@@ -2058,6 +2125,28 @@ static void R_StudioDrawPoints( void )
 
 		for( int b = 0; b < nb; b++ )
 			bonehide[b] = VR_ViewModelBoneHidden( vrbones[b].name );
+
+		// the manual reload system wants to know where the magazine and the slide really are
+		if( RI.currententity == tr.viewent )
+		{
+			byte zone[MAXSTUDIOBONES];
+			qboolean any = false;
+
+			for( int b = 0; b < nb; b++ )
+			{
+				zone[b] = (byte)VR_ReloadBoneZone( vrbones[b].name );
+				any |= zone[b] != 0;
+			}
+
+			if( any )
+			{
+				for( int i = 0; i < numverts; i++ )
+				{
+					if( pvertbone[i] < nb && zone[pvertbone[i]] )
+						VR_ReloadZoneAccum( zone[pvertbone[i]], g_studio.verts[i] );
+				}
+			}
+		}
 
 		for( int i = 0; i < numverts; i++ )
 			g_studio.vr_hidden[i] = ( pvertbone[i] < nb && bonehide[pvertbone[i]] );
@@ -3241,6 +3330,7 @@ static int R_StudioDrawModel( int flags )
 		R_StudioMergeBones( RI.currententity, RI.currentmodel );
 	else R_StudioSetupBones( RI.currententity );
 
+	R_VRAdjustBones();
 	R_StudioSaveBones();
 
 	if( flags & STUDIO_EVENTS )
@@ -3412,11 +3502,33 @@ static void R_VRDrawLeftHand( void )
 	studiohdr_t *hdr;
 	model_t *mod;
 	int idle = 0;
+	float frame = 0.0f;
+	vr_rl_left_t rld;
+	qboolean from_weapon = false;
 
-	if( !VR_GetLeftHandPose( origin, angles ))
-		return;
+	// the manual reload system may want something else than the idle hand
+	if( VR_ReloadLeftDraw( &rld ))
+	{
+		if( rld.hide )
+			return;
 
-	mod = gEngfuncs.Mod_ForName( VR_LeftHandModel(), false, true );
+		from_weapon = rld.weapon_model;
+	}
+
+	if( from_weapon )
+	{
+		// the left arm (and a magazine) of the weapon model in your right hand, in one of its animation frames
+		mod = tr.viewent ? tr.viewent->model : NULL;
+		VectorCopy( rld.origin, origin );
+		VectorCopy( rld.angles, angles );
+	}
+	else
+	{
+		if( !VR_GetLeftHandPose( origin, angles ))
+			return;
+
+		mod = gEngfuncs.Mod_ForName( VR_LeftHandModel(), false, true );
+	}
 
 	if( !mod || mod->type != mod_studio )
 		return;
@@ -3426,15 +3538,29 @@ static void R_VRDrawLeftHand( void )
 	if( !hdr || hdr->numseq <= 0 )
 		return;
 
-	for( int i = 0; i < hdr->numseq; i++ )
+	if( from_weapon )
 	{
-		mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex) + i;
+		mstudioseqdesc_t *sd;
 
-		if( VR_IsIdleLabel( sd->label ))
+		idle = bound( 0, rld.seq, hdr->numseq - 1 );
+		sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex) + idle;
+		frame = sd->numframes > 1 ? bound( 0.0f, rld.frame, (float)( sd->numframes - 1 )) * 256.0f / ( sd->numframes - 1 ) : 0.0f;
+		r_vr_lscale = rld.scale;
+	}
+	else
+	{
+		for( int i = 0; i < hdr->numseq; i++ )
 		{
-			idle = i;
-			break;
+			mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex) + i;
+
+			if( VR_IsIdleLabel( sd->label ))
+			{
+				idle = i;
+				break;
+			}
 		}
+
+		r_vr_lscale = 0.0f;
 	}
 
 	memset( &vr_lhand_ent, 0, sizeof( vr_lhand_ent ));
@@ -3445,7 +3571,7 @@ static void R_VRDrawLeftHand( void )
 	VectorCopy( origin, vr_lhand_ent.curstate.origin );
 	VectorCopy( angles, vr_lhand_ent.curstate.angles );
 	vr_lhand_ent.curstate.sequence = idle;
-	vr_lhand_ent.curstate.frame = 0.0f;
+	vr_lhand_ent.curstate.frame = frame;
 	vr_lhand_ent.curstate.rendermode = kRenderNormal;
 	vr_lhand_ent.curstate.renderamt = 255;
 
@@ -3462,6 +3588,7 @@ static void R_VRDrawLeftHand( void )
 
 	// the clip plane may have been left on by the last arm mesh
 	pglDisable( GL_CLIP_PLANE0 );
+	r_vr_lscale = 0.0f;
 
 	RI.currententity = saved_ent;
 	RI.currentmodel = saved_model;
@@ -3543,6 +3670,21 @@ void R_DrawViewModel( void )
 		VectorCopy( view->angles, saved_angles );
 		VectorCopy( vr_origin, view->origin );
 		VectorCopy( vr_angles, view->angles );
+
+		// the reload system needs to know where the weapon is and what the game is animating
+		VR_ReloadSetGunPose( vr_origin, vr_angles, VR_GetViewModelScale( ));
+
+		if( view->model->type == mod_studio )
+		{
+			studiohdr_t *ohdr = (studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, view->model );
+
+			if( ohdr && view->curstate.sequence >= 0 && view->curstate.sequence < ohdr->numseq )
+			{
+				mstudioseqdesc_t *osd = (mstudioseqdesc_t *)((byte *)ohdr + ohdr->seqindex) + view->curstate.sequence;
+
+				VR_ReloadObserve( osd->label );
+			}
+		}
 	}
 
 	// adjust the depth range to prevent view model from poking into walls
@@ -3570,7 +3712,7 @@ void R_DrawViewModel( void )
 				view->curstate.frame = sd->numframes > 1 ? bound( 0.0f, lock_frame, (float)( sd->numframes - 1 )) * 256.0f / ( sd->numframes - 1 ) : 0.0f;
 				g_studio.interpolate = false;
 			}
-			else if( VR_ViewModelFrozen( ))
+			else if( VR_ViewModelFrozen( ) || VR_ReloadWantsIdle( ))
 			{
 				// always the same pose, the first idle animation, so the hand never moves when the weapon would animate
 				int idle = 0;

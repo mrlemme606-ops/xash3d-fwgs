@@ -63,5 +63,33 @@ qboolean VR_GetLeftHandPose( vec3_t origin, vec3_t angles );
 float VR_GetLeftHandScale( void );
 const char *VR_LeftHandModel( void );
 void VR_SetHandPass( qboolean left );
+qboolean VR_GetLeftHandPoseOfs( vec3_t origin, vec3_t angles, const float *ofs );
+qboolean VR_GetHandBasis( int hand, vec3_t pos, vec3_t fwd, vec3_t left, vec3_t up );
+void VR_GetHeadGame( vec3_t pos, float *yaw );
+
+// manual reloading (gl_vr_reload.c)
+typedef struct
+{
+	qboolean	hide;		// draw no left hand at all
+	qboolean	weapon_model;	// draw the left arm of the weapon in hand instead of the universal hand
+	int		seq;
+	float		frame;
+	float		scale;
+	vec3_t		origin, angles;
+} vr_rl_left_t;
+
+void VR_ReloadInitCvars( void );
+void VR_ReloadTick( void );
+void VR_ReloadSetGunPose( const vec3_t origin, const vec3_t angles, float scale );
+void VR_ReloadObserve( const char *label );
+int VR_ReloadBoneZone( const char *bonename );
+void VR_ReloadZoneAccum( int zone, const float *pos );
+void VR_ReloadZoneFlush( void );
+qboolean VR_ReloadBoneHidden( qboolean left_pass, const char *bonename, qboolean base_hidden );
+qboolean VR_ReloadIsBoltBone( const char *bonename );
+qboolean VR_ReloadBoltOffset( float off[3] );
+qboolean VR_ReloadWantsIdle( void );
+const float *VR_ReloadRightOffsets( void );
+qboolean VR_ReloadLeftDraw( vr_rl_left_t *d );
 
 #endif // GL_VR_H

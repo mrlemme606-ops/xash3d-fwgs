@@ -51,6 +51,9 @@ static CVAR_DEFINE_AUTO( vr_in_dir_yaw, "0", 0, "(internal) yaw of the direction
 static CVAR_DEFINE_AUTO( vr_in_dir_pitch, "0", 0, "(internal) pitch of the direction the right hand points" );
 static CVAR_DEFINE_AUTO( vr_in_crouch, "0", 0, "(internal) physically crouching" );
 static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
+static CVAR_DEFINE_AUTO( vr_in_mask, "0", 0, "(internal) buttons the reload system keeps away from the game" );
+static CVAR_DEFINE_AUTO( vr_in_noswing, "0", 0, "(internal) no melee swings right now (reloading)" );
+static CVAR_DEFINE_AUTO( vr_in_reload, "0", 0, "(internal) the reload system finished a manual reload: press the reload key" );
 
 // settings
 static CVAR_DEFINE_AUTO( vr_turn_mode, "0", FCVAR_ARCHIVE, "0 = snap turn, 1 = smooth turn" );
@@ -64,6 +67,7 @@ static CVAR_DEFINE_AUTO( vr_melee_speed, "2.0", FCVAR_ARCHIVE, "hand speed in m/
 static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.1", FCVAR_ARCHIVE, "seconds between two swings (a swing has to slow down before the next one counts anyway)" );
 static CVAR_DEFINE_AUTO( vr_key_swing, "mouse1", FCVAR_ARCHIVE, "key pressed when you swing a melee weapon" );
 static CVAR_DEFINE_AUTO( vr_key_whip, "mouse2", FCVAR_ARCHIVE, "key pressed when you swing a gun (pistol whip). empty = nothing" );
+static CVAR_DEFINE_AUTO( vr_key_reload, "r", FCVAR_ARCHIVE, "key pressed for you when a manual reload is finished (the game then does the actual reload)" );
 static CVAR_DEFINE_AUTO( vr_debug_move, "0", 0, "print the player's movement type when it changes (helps find where analog movement fails)" );
 
 // which key each controller button presses. single character, or mouse1/2/3, space, ctrl, shift, enter, tab, escape. empty = nothing
@@ -91,6 +95,7 @@ enum
 	VRB_CROUCH,	// likewise
 	VRB_FORWARD, VRB_BACK, VRB_LEFT, VRB_RIGHT,	// left stick as keys (digital walking)
 	VRB_SWING, VRB_WHIP,	// made here from a fast hand swing
+	VRB_RELOAD,	// made here when a manual reload is finished
 	VRB_COUNT
 };
 
@@ -100,7 +105,7 @@ static convar_t *vr_key_cvars[VRB_COUNT] =
 	&vr_key_b, &vr_key_x, &vr_key_y, &vr_key_lstick, &vr_key_rstick,
 	&vr_key_jump, &vr_key_crouch,
 	&vr_key_forward, &vr_key_back, &vr_key_left, &vr_key_right,
-	&vr_key_swing, &vr_key_whip
+	&vr_key_swing, &vr_key_whip, &vr_key_reload
 };
 
 static int vr_pressed_key[VRB_COUNT];	// key code sent on press, 0 = not held
@@ -208,6 +213,9 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_shake );
 	Cvar_RegisterVariable( &vr_in_crouch );
 	Cvar_RegisterVariable( &vr_in_buttons );
+	Cvar_RegisterVariable( &vr_in_mask );
+	Cvar_RegisterVariable( &vr_in_noswing );
+	Cvar_RegisterVariable( &vr_in_reload );
 	Cvar_RegisterVariable( &vr_turn_mode );
 	Cvar_RegisterVariable( &vr_snap_angle );
 	Cvar_RegisterVariable( &vr_smooth_speed );
@@ -375,19 +383,25 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	in_game = active && cls.key_dest == key_game && !cl.paused && !cl.intermission;
 	buttons = (int)vr_in_buttons.value;
 
+	// the reload system keeps some buttons away from the game while it is using them, and presses reload when it is done
+	buttons &= ~(int)vr_in_mask.value;
+
+	if( in_game && vr_in_reload.value > 0.5f )
+		buttons |= BIT( VRB_RELOAD );
+
 	// where does the game aim? 0 = body (mouse), 1 = head, 2 = hand while acting, 3 = hand always
 	head_rel = vr_in_head_yaw.value;
 	mode = (int)vr_aim_mode.value;
 
 	// using something or shooting: aim with the hand for a moment (walking keeps following the head otherwise)
-	if( buttons & ( BIT( VRB_RTRIGGER ) | BIT( VRB_LTRIGGER ) | BIT( VRB_B )))
+	if( buttons & ( BIT( VRB_RTRIGGER ) | BIT( VRB_B )))
 		vr_hand_aim_until = host.realtime + 0.35;
 
 	// swinging a weapon by hand: a fast hand movement attacks, aimed where the hand is going
 	if( vr_in_hand_speed.value < vr_melee_speed.value * 0.5f )
 		vr_swing_armed = true;
 
-	if( in_game && vr_melee_enable.value && vr_in_hand_valid.value > 0.5f && vr_swing_armed
+	if( in_game && vr_melee_enable.value && vr_in_noswing.value < 0.5f && vr_in_hand_valid.value > 0.5f && vr_swing_armed
 		&& vr_in_hand_speed.value > vr_melee_speed.value && host.realtime >= vr_melee_next
 		&& ( vr_in_melee.value > 0.5f || !COM_StringEmptyOrNULL( vr_key_whip.string )))
 	{
