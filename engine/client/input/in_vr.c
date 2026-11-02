@@ -68,6 +68,7 @@ static CVAR_DEFINE_AUTO( vr_turn_mode, "0", FCVAR_ARCHIVE, "0 = snap turn, 1 = s
 static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in degrees" );
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
 static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = body (mouse), 1 = head, 2 = right hand while you use/shoot and head otherwise (default), 3 = right hand always" );
+static CVAR_DEFINE_AUTO( vr_move_digital_ents, "", FCVAR_ARCHIVE, "names of entities (as vr_debug_move shows them, like *16) that always count as a boat or train to stand on" );
 static CVAR_DEFINE_AUTO( vr_move_digital, "1", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
 static CVAR_DEFINE_AUTO( vr_use_aim, "2", FCVAR_ARCHIVE, "what the use key (right grip) aims along: 0 = your head, 1 = the exact point your hand ray hits, 2 = the direction your hand points" );
 static CVAR_DEFINE_AUTO( vr_melee_enable, "1", FCVAR_ARCHIVE, "1 = swinging your hand fast with a melee weapon attacks" );
@@ -237,6 +238,7 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_smooth_speed );
 	Cvar_RegisterVariable( &vr_aim_mode );
 	Cvar_RegisterVariable( &vr_move_digital );
+	Cvar_RegisterVariable( &vr_move_digital_ents );
 	Cvar_RegisterVariable( &vr_debug_move );
 
 	for( i = 0; i < VRB_COUNT; i++ )
@@ -548,17 +550,67 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		Con_Printf( "VR: movetype is now %d\n", vr_last_movetype );
 	}
 
-	// boats, trains and lifts: you stand on another entity. these also need real key presses
+	// boats, trains and lifts also need real key presses. ordinary floors can be entities too, so only count:
+	// a vehicle you are controlling, something under your feet that is really moving, or a name you listed
 	on_boat = false;
 
-	if( clgame.pmove && clgame.pmove->onground > 0 && clgame.pmove->onground < clgame.pmove->numphysent )
-		on_boat = !clgame.pmove->physents[clgame.pmove->onground].player;
-
-	if( vr_debug_move.value && on_boat != vr_last_boat )
+	if( clgame.pmove )
 	{
-		vr_last_boat = on_boat;
-		Con_Printf( "VR: standing on another entity: %d (%s)\n", on_boat,
-			on_boat ? clgame.pmove->physents[clgame.pmove->onground].name : "-" );
+		static int plat_ent = -1;
+		static vec3_t plat_org;
+		static double plat_time, plat_moving_until, dbg_next;
+		static float plat_speed;
+		int g = clgame.pmove->onground;
+		const char *gname = "-";
+
+		if( FBitSet( clgame.pmove->flags, FL_ONTRAIN ))
+			on_boat = true;
+
+		if( g > 0 && g < clgame.pmove->numphysent && !clgame.pmove->physents[g].player )
+		{
+			physent_t *pe = &clgame.pmove->physents[g];
+
+			gname = pe->name;
+
+			if( vr_move_digital_ents.string[0] && Q_stristr( vr_move_digital_ents.string, pe->name ))
+				on_boat = true;
+
+			if( g != plat_ent )
+			{
+				plat_ent = g;
+				VectorCopy( pe->origin, plat_org );
+				plat_time = host.realtime;
+				plat_speed = 0.0f;
+			}
+			else if( host.realtime - plat_time > 0.25 )
+			{
+				vec3_t d;
+
+				VectorSubtract( pe->origin, plat_org, d );
+				plat_speed = VectorLength( d ) / (float)( host.realtime - plat_time );
+				VectorCopy( pe->origin, plat_org );
+				plat_time = host.realtime;
+
+				if( plat_speed > 15.0f )
+					plat_moving_until = host.realtime + 1.5;
+			}
+		}
+		else
+		{
+			plat_ent = -1;
+			plat_speed = 0.0f;
+		}
+
+		if( host.realtime < plat_moving_until )
+			on_boat = true;
+
+		if( vr_debug_move.value && host.realtime > dbg_next )
+		{
+			dbg_next = host.realtime + 1.0;
+			Con_Printf( "VR move: movetype %d, flags 0x%x, ground entity %d (%s), it moves at %.0f units/s -> %s%s\n",
+				clgame.pmove->movetype, clgame.pmove->flags, g, gname, plat_speed,
+				on_boat ? "boat/train (keys)" : "normal walking", on_ladder ? ", ladder" : "" );
+		}
 	}
 
 	// vr_move_digital 0 is the normal analog walking, but ladders and boats need the keys: switch for as long as you are on one
@@ -569,11 +621,13 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	{
 		static float stand_height;
 		float h = clgame.pmove->view_ofs[2] - clgame.pmove->player_mins[clgame.pmove->usehull][2];
+		qboolean ducking = FBitSet( clgame.pmove->flags, FL_DUCKING ) || clgame.pmove->bInDuck;
 
-		if( h > stand_height )
+		// the standing height is only learned while the character is not ducking at all
+		if( !ducking )
 			stand_height = h;
 
-		Cvar_DirectSetValue( &vr_in_duck_drop, bound( 0.0f, stand_height - h, 60.0f ));
+		Cvar_DirectSetValue( &vr_in_duck_drop, ducking ? bound( 0.0f, stand_height - h, 60.0f ) : 0.0f );
 	}
 
 	// right stick flicks: up = jump (a short key press), down = toggle crouch

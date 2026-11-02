@@ -127,7 +127,7 @@ static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotat
 static CVAR_DEFINE_AUTO( vr_flip_vfov, "0", FCVAR_ARCHIVE, "diagnostic: swap the up and down field of view. Try 1 if what is drawn sits a little too low or high compared to the menu pointer" );
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.30", FCVAR_ARCHIVE, "meters below your recentered height that count as physically crouching (you stand up again at 60% of this)" );
-static CVAR_DEFINE_AUTO( vr_crouch_comp, "0", FCVAR_ARCHIVE, "0 = measured automatically. > 0 = give back this fixed number of units when you crouch (the old way)" );
+static CVAR_DEFINE_AUTO( vr_crouch_comp, "28", FCVAR_ARCHIVE, "units the view is given back when you crouch (the game lowers it too, so it is not counted twice). 0 = measured automatically (experimental)" );
 static CVAR_DEFINE_AUTO( vr_nofreeze_models, "camera+branch", 0, "weapons that are never held in the idle pose (their own animation is used): part of the file name, + between names" );
 static CVAR_DEFINE_AUTO( vr_vm_rot_local, "1", FCVAR_ARCHIVE, "1 = the weapon's pitch/yaw/roll turn in the hand's own axes. 0 = the old way (added to world angles)" );
 static CVAR_DEFINE_AUTO( vr_sky_models, "1", FCVAR_ARCHIVE, "1 = draw the sky models the maps use (sky_sphere_*.mdl) around you instead of the black sky box" );
@@ -327,8 +327,13 @@ static void VR_VisualsOn_f( void )
 	gEngfuncs.Con_Printf( "VR: controller debug visuals are on\n" );
 }
 
+static void VR_CaptureTuneDefaults( void );
+
 void VR_InitCvars( void )
 {
+	// before anything is registered the cvars still hold the defaults from this file, not what an old config saved
+	VR_CaptureTuneDefaults();
+
 	gEngfuncs.Cvar_RegisterVariable( &vr_enable );
 	gEngfuncs.Cvar_RegisterVariable( &vr_worldscale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_flip_roll );
@@ -1409,6 +1414,20 @@ static void VR_WeaponFileName( const char *modelname, char *out, size_t size )
 
 	VR_ModelBaseName( modelname, name, sizeof( name ));
 	Q_snprintf( out, size, "vr_weapon_%s.cfg", name );
+}
+
+// the settings every weapon starts from: the defaults in this file. a weapon without a saved file gets exactly these
+static void VR_CaptureTuneDefaults( void )
+{
+	int i;
+
+	if( vr_tune_have_base )
+		return;
+
+	for( i = 0; i < VR_TUNE_COUNT; i++ )
+		vr_tune_base[i] = Q_atof( vr_tune_vars[i]->string );
+
+	vr_tune_have_base = true;
 }
 
 static void VR_UpdateWeaponProfile( void )

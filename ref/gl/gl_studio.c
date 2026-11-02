@@ -1344,7 +1344,8 @@ R_StudioLighting
 */
 static void R_StudioLighting( float *lv, int bone, int flags, vec3_t normal )
 {
-	if( FBitSet( flags, STUDIO_NF_FULLBRIGHT ))
+	// the sky models are never shaded by the map's lights (a night map would make them black)
+	if( FBitSet( flags, STUDIO_NF_FULLBRIGHT ) || r_sky_scale > 0.0f )
 	{
 		*lv = 1.0f;
 		return;
