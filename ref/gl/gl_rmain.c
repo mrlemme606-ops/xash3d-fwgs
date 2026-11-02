@@ -824,6 +824,7 @@ R_DrawEntitiesOnList
 // Cry of Fear draws its sky as models (sky_sphere_*.mdl, sky_blixt.mdl...) that are centered on the viewer
 qboolean r_vr_skydome;
 extern float r_sky_scale;
+extern float R_StudioModelRadius( model_t *mod );
 
 static qboolean R_IsSkyModel( const cl_entity_t *e )
 {
@@ -850,6 +851,7 @@ static void R_DrawSkyModels( void )
 		if( !R_IsSkyModel( e ))
 			continue;
 
+		tr.blend = 1.0f;
 		VectorCopy( e->origin, saved );
 		VectorCopy( RI.rvp.vieworigin, e->origin );
 		RI.currententity = e;
@@ -862,6 +864,9 @@ static void R_DrawSkyModels( void )
 
 			for( k = 0; k < 3; k++ )
 				rad = Q_max( rad, Q_max( fabs( e->model->mins[k] ), fabs( e->model->maxs[k] )));
+
+			// the header bounds are often empty, so measure the vertices as well
+			rad = Q_max( rad, R_StudioModelRadius( e->model ));
 
 			r_sky_scale = ( rad > want && rad > 1.0f ) ? want / rad : 1.0f;
 		}
@@ -1199,6 +1204,19 @@ void R_RenderFrame( const ref_viewpass_t *rvp )
 		tr.fCustomRendering = false;
 		R_RunViewmodelEvents();
 		tr.realframecount++;
+
+		// rifle scope: the zoomed picture has to exist before the eyes are drawn
+		{
+			ref_viewpass_t scopepass;
+
+			if( VR_SetupScopeView( rvp, &scopepass ))
+			{
+				R_SetupRefParams( &scopepass );
+				R_RenderScene();
+				VR_EndScopePass();
+				R_SetupRefParams( rvp );
+			}
+		}
 
 		for( eye = 0; eye < 2; eye++ )
 		{

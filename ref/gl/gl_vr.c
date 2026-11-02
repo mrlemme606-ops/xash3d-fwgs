@@ -130,6 +130,23 @@ static CVAR_DEFINE_AUTO( vr_crouch_height, "0.30", FCVAR_ARCHIVE, "meters below 
 static CVAR_DEFINE_AUTO( vr_crouch_comp, "28", FCVAR_ARCHIVE, "units the view is given back when you crouch (the game lowers it too, so it is not counted twice). 0 = measured automatically (experimental)" );
 static CVAR_DEFINE_AUTO( vr_nofreeze_models, "camera+branch", 0, "weapons that are never held in the idle pose (their own animation is used): part of the file name, + between names" );
 static CVAR_DEFINE_AUTO( vr_vm_rot_local, "1", FCVAR_ARCHIVE, "1 = the weapon's pitch/yaw/roll turn in the hand's own axes. 0 = the old way (added to world angles)" );
+static CVAR_DEFINE_AUTO( vr_light_debug, "1", 0, "1 = print the animation name of a phone / flashlight / flare whenever it changes (to tune vr_light_on_seq / vr_light_off_seq)" );
+static CVAR_DEFINE_AUTO( vr_light_on_seq, "flash+_on+burn+ignite+light_on", 0, "animation name fragments (separated by +) that mean the light is ON" );
+static CVAR_DEFINE_AUTO( vr_light_off_seq, "sms+_off+unlit+extinguish+light_off", 0, "animation name fragments (separated by +) that mean the light is OFF" );
+static CVAR_DEFINE_AUTO( vr_light_x, "6", 0, "where the light sits, forward of the hand (weapon axes, saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_light_y, "0", 0, "where the light sits, left of the hand (saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_light_z, "0", 0, "where the light sits, above the hand (saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_kill_body_light, "1", 0, "1 = while you hold a phone, flashlight, flare or lantern, remove the game's own lights around your body (they float where your body is, not your hand)" );
+static CVAR_DEFINE_AUTO( vr_scope, "1", FCVAR_ARCHIVE, "1 = rifle scope: lift the rifle to your eye and the scope shows a zoomed view" );
+static CVAR_DEFINE_AUTO( vr_scope_models, "rifle+sniper+hunting", 0, "weapon model names (separated by +) that have a scope" );
+static CVAR_DEFINE_AUTO( vr_scope_fov, "10", 0, "field of view of the scope image in degrees (smaller = more zoom, saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_scope_size, "512", 0, "resolution of the scope image" );
+static CVAR_DEFINE_AUTO( vr_scope_x, "0", 0, "scope eyepiece position, forward of the hand (saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_scope_y, "0", 0, "scope eyepiece position, left of the hand (saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_scope_z, "3", 0, "scope eyepiece position, above the hand (saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_scope_radius, "1.2", 0, "radius of the scope lens in game units (saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_scope_cam, "6", 0, "how far in front of the eyepiece the scope camera sits" );
+static CVAR_DEFINE_AUTO( vr_scope_range, "24", 0, "the scope view only renders while your head is this close to the eyepiece" );
 static CVAR_DEFINE_AUTO( vr_sky_models, "1", FCVAR_ARCHIVE, "1 = draw the sky models the maps use (sky_sphere_*.mdl) around you instead of the black sky box" );
 static CVAR_DEFINE_AUTO( vr_hide_crosshair, "1", FCVAR_ARCHIVE, "1 = switch the game's crosshair off (the laser and red cross are your aim)" );
 static CVAR_DEFINE_AUTO( vr_physical_crouch, "1", FCVAR_ARCHIVE, "1 = crouching in real life also crouches the character, so you can get through low gaps" );
@@ -264,6 +281,7 @@ static struct
 
 static void VR_EnsureEyeTargets( void );
 static void VR_UpdateWeaponProfile( void );
+static void VR_WeaponReset_f( void );
 static void VR_WeaponSave_f( void );
 static void VR_Center_f( void );
 static void VR_HideCrosshair( void );
@@ -398,6 +416,23 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_comp );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hide_crosshair );
 	gEngfuncs.Cvar_RegisterVariable( &vr_sky_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_light_debug );
+	gEngfuncs.Cvar_RegisterVariable( &vr_light_on_seq );
+	gEngfuncs.Cvar_RegisterVariable( &vr_light_off_seq );
+	gEngfuncs.Cvar_RegisterVariable( &vr_light_x );
+	gEngfuncs.Cvar_RegisterVariable( &vr_light_y );
+	gEngfuncs.Cvar_RegisterVariable( &vr_light_z );
+	gEngfuncs.Cvar_RegisterVariable( &vr_kill_body_light );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_fov );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_size );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_x );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_y );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_z );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_radius );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_cam );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_range );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_rot_local );
 	gEngfuncs.Cvar_RegisterVariable( &vr_nofreeze_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
@@ -414,6 +449,7 @@ void VR_InitCvars( void )
 	VR_ReloadInitCvars();
 	VR_UIInitCvars();
 	gEngfuncs.Cmd_AddCommand( "vr_vm_center", VR_Center_f, "put the middle of the weapon in your hand. vr_vm_center <size> also sizes it (size = length in units)" );
+	gEngfuncs.Cmd_AddCommand( "vr_weapon_reset", VR_WeaponReset_f, "put the weapon in hand back to the default position/size and overwrite its saved file" );
 	gEngfuncs.Cmd_AddCommand( "vr_weapon_save", VR_WeaponSave_f, "save the current weapon position/size settings for the weapon you are holding" );
 	gEngfuncs.Cmd_AddCommand( "vr_recenter", VR_Recenter_f, "recenter the VR view on the current head position and direction" );
 }
@@ -621,6 +657,12 @@ static qboolean vr_vm_nofreeze;	// never held in the idle pose, whatever the lis
 static qboolean vr_vm_static;	// the weapon in hand never animates (phone, syringe)
 static qboolean vr_vm_light;	// the weapon in hand is a flashlight (the phone)
 static qboolean vr_vm_melee;	// the weapon in hand is swung by hand
+static qboolean vr_vm_scope;	// the weapon in hand has a scope
+static int vr_light_state = -1;	// -1 = unknown, 0 = off, 1 = on, from the animation the game plays
+static char vr_light_label[40];
+// axes of the weapon in hand, from the last pose
+static qboolean vr_pose_valid;
+static vec3_t vr_pose_f, vr_pose_l, vr_pose_u;
 static qboolean vr_dump_bones_done;
 static int vr_dbg_ent = -1;
 static float vr_dbg_fraction;
@@ -888,6 +930,7 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 		return false;
 
 	vr.vm_applied++;
+	vr_pose_valid = false;
 
 	{
 		// extra offsets while a manual reload is going on (vr_rl_tune 2)
@@ -898,6 +941,11 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 		gz = vr_vm_grip_z.value + rlo[2];
 		rp = rlo[3]; ry = rlo[4]; rr = rlo[5];
 	}
+
+	// saved numbers from old experiments (grips of 100+ units) fling a weapon far away from the hand
+	gx = bound( -40.0f, gx, 40.0f );
+	gy = bound( -40.0f, gy, 40.0f );
+	gz = bound( -40.0f, gz, 40.0f );
 
 	if( !VR_TwoHandBasis( bf, bl, bu ))
 	{
@@ -958,6 +1006,11 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 		angles[YAW] = yaw + vr_vm_yaw.value + ry;
 		angles[ROLL] = roll + vr_vm_roll.value + rr;
 	}
+
+	VectorCopy( bf, vr_pose_f );
+	VectorCopy( bl, vr_pose_l );
+	VectorCopy( bu, vr_pose_u );
+	vr_pose_valid = true;
 
 	return true;
 }
@@ -1041,7 +1094,7 @@ void VR_CenterFinish( void )
 
 float VR_GetViewModelScale( void )
 {
-	return bound( 0.02f, vr_vm_scale.value, 4.0f );
+	return bound( 0.02f, vr_vm_scale.value, 2.0f );
 }
 
 static qboolean VR_ContainsNoCase( const char *s, const char *frag )
@@ -1381,12 +1434,13 @@ When you switch weapons they are restored, then vr_weapon_<model>.cfg is run if 
 static convar_t *vr_tune_vars[] =
 {
 	&vr_vm_grip_x, &vr_vm_grip_y, &vr_vm_grip_z, &vr_vm_pitch, &vr_vm_yaw,
-	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut, &vr_vm_cut_pitch, &vr_vm_cut_yaw
+	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut, &vr_vm_cut_pitch, &vr_vm_cut_yaw,
+	&vr_light_x, &vr_light_y, &vr_light_z, &vr_scope_x, &vr_scope_y, &vr_scope_z, &vr_scope_radius, &vr_scope_fov
 };
 
 #define VR_TUNE_COUNT ( (int)( sizeof( vr_tune_vars ) / sizeof( vr_tune_vars[0] )))
 
-static float vr_tune_base[16];
+static float vr_tune_base[32];
 static qboolean vr_tune_have_base;
 static char vr_tune_model[64];
 
@@ -1470,6 +1524,9 @@ static void VR_UpdateWeaponProfile( void )
 		vr_vm_nofreeze = VR_ListMatches( vr_nofreeze_models.string, base, true );
 		vr_vm_omni = VR_ListMatches( vr_omni_models.string, base, true );
 		vr_vm_flare = VR_ContainsNoCase( base, "flare" );
+		vr_vm_scope = VR_ListMatches( vr_scope_models.string, base, true );
+		vr_light_state = -1;
+		vr_light_label[0] = 0;
 		gEngfuncs.Cvar_SetValue( "vr_in_melee", vr_vm_melee ? 1.0f : 0.0f );
 	}
 
@@ -1484,7 +1541,7 @@ static void VR_UpdateWeaponProfile( void )
 
 static void VR_WeaponSave_f( void )
 {
-	char text[768], file[96];
+	char text[1024], file[96];
 	int i, len = 0;
 
 	if( !vr_tune_model[0] )
@@ -1501,6 +1558,30 @@ static void VR_WeaponSave_f( void )
 	if( gEngfuncs.fsapi->WriteFile( file, text, len ))
 		gEngfuncs.Con_Printf( "VR: saved settings for %s to %s\n", vr_tune_model, file );
 	else gEngfuncs.Con_Printf( S_ERROR "VR: can't write %s\n", file );
+}
+
+static void VR_WeaponReset_f( void )
+{
+	char text[1024], file[96];
+	int i, len = 0;
+
+	if( !vr_tune_model[0] )
+	{
+		gEngfuncs.Con_Printf( "VR: hold a weapon first\n" );
+		return;
+	}
+
+	// back to the defaults, and overwrite the saved file so old (broken) numbers are gone
+	for( i = 0; i < VR_TUNE_COUNT; i++ )
+		gEngfuncs.Cvar_SetValue( vr_tune_vars[i]->name, vr_tune_base[i] );
+
+	VR_WeaponFileName( vr_tune_model, file, sizeof( file ));
+
+	for( i = 0; i < VR_TUNE_COUNT; i++ )
+		len += Q_snprintf( text + len, sizeof( text ) - len, "%s %g\n", vr_tune_vars[i]->name, vr_tune_base[i] );
+
+	gEngfuncs.fsapi->WriteFile( file, text, len );
+	gEngfuncs.Con_Printf( "VR: %s is back to the defaults (and %s was overwritten)\n", vr_tune_model, file );
 }
 
 static void VR_TrackCamera( const ref_viewpass_t *game )
@@ -1605,6 +1686,94 @@ static dlight_t *VR_AllocLight( void )
 	return &gp_dlights[freeslot];
 }
 
+// the last place in "label" where one of the +separated fragments in "list" ends (-1 = no fragment found)
+static int VR_LastMatchEnd( const char *list, const char *label )
+{
+	const char *p = list;
+	size_t ln = strlen( label );
+	int best = -1;
+
+	while( p && *p )
+	{
+		char frag[48];
+		size_t n = 0, i, k;
+
+		while( *p == '+' || *p == ',' || *p == ' ' || *p == '|' ) p++;
+		while( *p && *p != '+' && *p != ',' && *p != ' ' && *p != '|' && n < sizeof( frag ) - 1 ) frag[n++] = *p++;
+		frag[n] = 0;
+
+		if( !n )
+			continue;
+
+		for( i = 0; i + n <= ln; i++ )
+		{
+			for( k = 0; k < n; k++ )
+			{
+				if( tolower( (unsigned char)label[i + k] ) != tolower( (unsigned char)frag[k] ))
+					break;
+			}
+
+			if( k == n && (int)( i + n ) > best )
+				best = (int)( i + n );
+		}
+	}
+
+	return best;
+}
+
+// the game says which animation the weapon in hand plays, that tells us whether its light is on
+void VR_LightObserve( const char *label )
+{
+	int on, off;
+
+	if( !label || ( !vr_vm_light && !vr_vm_omni ) || !Q_strcmp( label, vr_light_label ))
+		return;
+
+	Q_strncpy( vr_light_label, label, sizeof( vr_light_label ));
+
+	on = VR_LastMatchEnd( vr_light_on_seq.string, label );
+	off = VR_LastMatchEnd( vr_light_off_seq.string, label );
+
+	// "sms_to_flash" holds both words: whichever comes last is where the animation ends up
+	if( off >= 0 && off >= on ) vr_light_state = 0;
+	else if( on >= 0 ) vr_light_state = 1;
+
+	if( vr_light_debug.value )
+		gEngfuncs.Con_Printf( "VR light: animation '%s' -> light %s\n", label,
+			vr_light_state == 1 ? "ON" : vr_light_state == 0 ? "OFF" : "unknown (not changed)" );
+}
+
+static qboolean VR_LightActive( void )
+{
+	// phones and flashlights stay off until their animation says otherwise, flares and lanterns stay on
+	return vr_light_state == 1 || ( vr_light_state < 0 && vr_vm_omni );
+}
+
+// the game makes its own lights at your body for these items, they are not where your hand is
+static void VR_KillBodyLights( const ref_viewpass_t *game )
+{
+	int i;
+
+	if( !vr_kill_body_light.value )
+		return;
+
+	for( i = 0; i < MAX_DLIGHTS; i++ )
+	{
+		vec3_t d;
+
+		if( gp_dlights[i].key == VR_LIGHT_KEY || gp_dlights[i].radius <= 0.0f || gp_dlights[i].die < gp_cl->time )
+			continue;
+
+		VectorSubtract( gp_dlights[i].origin, game->vieworigin, d );
+
+		if( VectorLength( d ) < 96.0f )
+		{
+			gp_dlights[i].radius = 0.0f;
+			gp_dlights[i].die = 0.0f;
+		}
+	}
+}
+
 // a spotlight pool where the hand points, lit with the engine's dynamic light so both eyes see it
 static void VR_UpdateHandLight( const ref_viewpass_t *game )
 {
@@ -1616,17 +1785,28 @@ static void VR_UpdateHandLight( const ref_viewpass_t *game )
 	if( !vr_phone_light.value || !vr.hand[1].valid || ( !vr_vm_light && !vr_vm_omni ))
 		return;
 
+	VR_KillBodyLights( game );
+
+	if( !VR_LightActive( ))
+		return;
+
 	if( vr_vm_omni )
 	{
 		// flare or lantern: light all around the hand
-		VectorMA( vr.hand[1].pos, 6.0f, vr.hand[1].fwd, org );
+		if( vr_pose_valid )
+		{
+			VectorMA( vr.hand[1].pos, vr_light_x.value, vr_pose_f, org );
+			VectorMA( org, vr_light_y.value, vr_pose_l, org );
+			VectorMA( org, vr_light_z.value, vr_pose_u, org );
+		}
+		else VectorMA( vr.hand[1].pos, vr_light_x.value, vr.hand[1].fwd, org );
 
 		if( !( dl = VR_AllocLight( )))
 			return;
 
 		VectorCopy( org, dl->origin );
 		dl->radius = vr_omni_radius.value;
-		dl->color.r = vr_vm_flare ? 255 : 255;
+		dl->color.r = 255;
 		dl->color.g = vr_vm_flare ? 70 : 190;
 		dl->color.b = vr_vm_flare ? 40 : 110;
 		dl->die = gp_cl->time + 0.05f;
@@ -2073,6 +2253,222 @@ static void VR_ForgetTextureBinding( void )
 
 /*
 =================
+Rifle scope. While the rifle is lifted to your eye, the scene is drawn once more from the scope
+(narrow field of view, looking along the barrel) into a texture, and that texture is shown on a
+round lens at the eyepiece when each eye is drawn. Only for the plain window path (no vr_use_fbo).
+=================
+*/
+static GLuint vr_scope_tex;
+static int vr_scope_tex_w, vr_scope_tex_h;
+static qboolean vr_scope_in_pass;
+static qboolean vr_scope_ready;
+static vec3_t vr_scope_pos, vr_scope_f, vr_scope_l, vr_scope_u;
+
+qboolean VR_ScopePass( void )
+{
+	return vr_scope_in_pass;
+}
+
+static qboolean VR_ScopeCompute( void )
+{
+	vec3_t org, ang, d;
+	qboolean ok, old = vr.in_eye_pass;
+
+	if( !vr_scope.value || !vr_vm_scope || vr.use_fbo || !vr.hand[1].valid )
+		return false;
+
+	vr.in_eye_pass = true;
+	ok = VR_GetViewModelPose( org, ang );
+	vr.in_eye_pass = old;
+
+	if( !ok || !vr_pose_valid )
+		return false;
+
+	VectorCopy( vr_pose_f, vr_scope_f );
+	VectorCopy( vr_pose_l, vr_scope_l );
+	VectorCopy( vr_pose_u, vr_scope_u );
+
+	VectorMA( vr.hand[1].pos, vr_scope_x.value, vr_scope_f, vr_scope_pos );
+	VectorMA( vr_scope_pos, vr_scope_y.value, vr_scope_l, vr_scope_pos );
+	VectorMA( vr_scope_pos, vr_scope_z.value, vr_scope_u, vr_scope_pos );
+
+	// the head must be close to the eyepiece, and behind it
+	VectorSubtract( vr.head_game, vr_scope_pos, d );
+
+	if( VectorLength( d ) > vr_scope_range.value || DotProduct( d, vr_scope_f ) > 0.0f )
+		return false;
+
+	return true;
+}
+
+// called before the eyes are drawn: fills "out" with the scope's view when the scope is in use
+qboolean VR_SetupScopeView( const ref_viewpass_t *game, ref_viewpass_t *out )
+{
+	float xy, fov;
+	int size;
+
+	vr_scope_ready = false;
+
+	if( !VR_ScopeCompute( ))
+		return false;
+
+	size = bound( 128, (int)vr_scope_size.value, 1024 );
+	size = Q_min( size, Q_min( gpGlobals->width, gpGlobals->height ));
+	fov = bound( 2.0f, vr_scope_fov.value, 60.0f );
+
+	*out = *game;
+	VectorMA( vr_scope_pos, vr_scope_cam.value, vr_scope_f, out->vieworigin );
+
+	xy = sqrt( vr_scope_f[0] * vr_scope_f[0] + vr_scope_f[1] * vr_scope_f[1] );
+	out->viewangles[PITCH] = RAD2DEG( atan2( -vr_scope_f[2], xy ));
+	out->viewangles[YAW] = RAD2DEG( atan2( vr_scope_f[1], vr_scope_f[0] ));
+	out->viewangles[ROLL] = RAD2DEG( atan2( vr_scope_l[2], vr_scope_u[2] ));
+
+	out->fov_x = out->fov_y = fov;
+	out->viewport[0] = 0;
+	out->viewport[1] = 0;
+	out->viewport[2] = size;
+	out->viewport[3] = size;
+
+	vr_scope_in_pass = true;
+	return true;
+}
+
+// called after the scope's view was drawn: keep the picture
+void VR_EndScopePass( void )
+{
+	GLint vp[4];
+
+	vr_scope_in_pass = false;
+	pglGetIntegerv( GL_VIEWPORT, vp );
+
+	if( vp[2] < 16 || vp[3] < 16 )
+		return;
+
+	if( !vr_scope_tex || vr_scope_tex_w != vp[2] || vr_scope_tex_h != vp[3] )
+	{
+		if( vr_scope_tex )
+			pglDeleteTextures( 1, &vr_scope_tex );
+
+		pglGenTextures( 1, &vr_scope_tex );
+		pglBindTexture( GL_TEXTURE_2D, vr_scope_tex );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+		pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, vp[2], vp[3], 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
+		vr_scope_tex_w = vp[2];
+		vr_scope_tex_h = vp[3];
+	}
+	else pglBindTexture( GL_TEXTURE_2D, vr_scope_tex );
+
+	pglCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, vp[0], vp[1], vp[2], vp[3] );
+	VR_ForgetTextureBinding();
+	vr_scope_ready = true;
+}
+
+#define VR_SCOPE_SEGS	40
+
+// the round lens at the eyepiece, drawn in the eye's own pass
+static void VR_DrawScopeLens( void )
+{
+	float proj[16], view[16], r = vr_scope_radius.value;
+	vec3_t c, a, b;
+	int saved_tmu, unit, i;
+
+	if( !vr_scope_ready || !vr_scope_tex || r <= 0.0f )
+		return;
+
+	Matrix4x4_ToArrayFloatGL( RI.projectionMatrix, proj );
+	Matrix4x4_ToArrayFloatGL( RI.worldviewMatrix, view );
+
+	saved_tmu = glState.activeTMU;
+	pglPushAttrib( GL_ALL_ATTRIB_BITS );
+
+	for( unit = GL_MaxTextureUnits() - 1; unit >= 0; unit-- )
+	{
+		GL_SelectTexture( unit );
+		pglDisable( GL_TEXTURE_2D );
+	}
+
+	GL_SelectTexture( 0 );
+	pglDisable( GL_BLEND );
+	pglDisable( GL_ALPHA_TEST );
+	pglDisable( GL_CULL_FACE );
+	pglDisable( GL_SCISSOR_TEST );
+	pglDisable( GL_DEPTH_TEST );
+	pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+
+	pglMatrixMode( GL_PROJECTION );
+	pglPushMatrix();
+	pglLoadMatrixf( proj );
+	pglMatrixMode( GL_MODELVIEW );
+	pglPushMatrix();
+	pglLoadMatrixf( view );
+
+	// the black rim of the eyepiece
+	VectorMA( vr_scope_pos, 0.03f, vr_scope_f, c );
+	pglColor4f( 0.0f, 0.0f, 0.0f, 1.0f );
+	pglBegin( GL_TRIANGLE_FAN );
+	pglVertex3fv( c );
+
+	for( i = 0; i <= VR_SCOPE_SEGS; i++ )
+	{
+		float ang = (float)i * ( 2.0f * M_PI_F / VR_SCOPE_SEGS ), ca = cosf( ang ) * r * 1.3f, sa = sinf( ang ) * r * 1.3f;
+
+		VectorMA( c, ca, vr_scope_l, a );
+		VectorMA( a, sa, vr_scope_u, b );
+		pglVertex3fv( b );
+	}
+
+	pglEnd();
+
+	// the picture
+	pglEnable( GL_TEXTURE_2D );
+	pglBindTexture( GL_TEXTURE_2D, vr_scope_tex );
+	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
+	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	pglBegin( GL_TRIANGLE_FAN );
+	pglTexCoord2f( 0.5f, 0.5f );
+	pglVertex3fv( vr_scope_pos );
+
+	for( i = 0; i <= VR_SCOPE_SEGS; i++ )
+	{
+		float ang = (float)i * ( 2.0f * M_PI_F / VR_SCOPE_SEGS ), ca = cosf( ang ), sa = sinf( ang );
+
+		// left of the weapon is the left of the picture
+		VectorMA( vr_scope_pos, ca * r, vr_scope_l, a );
+		VectorMA( a, sa * r, vr_scope_u, b );
+		pglTexCoord2f( 0.5f - ca * 0.49f, 0.5f + sa * 0.49f );
+		pglVertex3fv( b );
+	}
+
+	pglEnd();
+	pglDisable( GL_TEXTURE_2D );
+
+	// crosshair
+	VectorMA( vr_scope_pos, -0.03f, vr_scope_f, c );
+	pglColor4f( 0.0f, 0.0f, 0.0f, 1.0f );
+	pglLineWidth( 1.5f );
+	pglBegin( GL_LINES );
+	VectorMA( c, r * 0.95f, vr_scope_l, a ); pglVertex3fv( a );
+	VectorMA( c, -r * 0.95f, vr_scope_l, a ); pglVertex3fv( a );
+	VectorMA( c, r * 0.95f, vr_scope_u, a ); pglVertex3fv( a );
+	VectorMA( c, -r * 0.95f, vr_scope_u, a ); pglVertex3fv( a );
+	pglEnd();
+
+	pglMatrixMode( GL_MODELVIEW );
+	pglPopMatrix();
+	pglMatrixMode( GL_PROJECTION );
+	pglPopMatrix();
+	pglPopAttrib();
+
+	GL_SelectTexture( saved_tmu );
+	VR_ForgetTextureBinding();
+}
+
+/*
+=================
 Diagnostic: a wireframe room that is fixed in the world, drawn with the same matrices as the game.
 If this room warps when you turn your head, the problem is in how the eye images are made or shown.
 If it stays rock solid while the game world warps, the problem is in what Cry of Fear draws.
@@ -2347,6 +2743,7 @@ void VR_EndEyePass( int eye )
 		pglGetIntegerv( GL_VIEWPORT, vr.dbg_viewport[eye & 1] );
 
 	VR_DrawTestScene();
+	VR_DrawScopeLens();
 	VR_DrawHands();
 
 	if( vr.use_fbo )

@@ -3401,7 +3401,7 @@ static void R_StudioDrawModelInternal( cl_entity_t *e, int flags )
 			R_StudioDrawPlayer( flags, &e->curstate );
 		else R_StudioDrawModel( flags );
 	}
-	else if( unlikely( r_studio_builtin_renderer.value ) || r_vr_viewmodel )
+	else if( unlikely( r_studio_builtin_renderer.value ) || r_vr_viewmodel || r_sky_scale > 0.0f )
 	{
 		if( e->player )
 			R_StudioDrawPlayer( flags, R_StudioGetPlayerState( e->index - 1 ));
@@ -3432,6 +3432,59 @@ static cl_entity_t *R_FindParentEntity( cl_entity_t *e, cl_entity_t **entities, 
 R_DrawStudioModel
 =================
 */
+// the real radius of a studio model, measured from its vertices (the header bounds are often empty)
+float R_StudioModelRadius( model_t *mod )
+{
+	static model_t *cache_mod[8];
+	static float cache_rad[8];
+	static int cache_n;
+	studiohdr_t *hdr;
+	float best = 0.0f;
+	int i, j, k;
+
+	if( !mod || mod->type != mod_studio )
+		return 0.0f;
+
+	for( i = 0; i < cache_n; i++ )
+	{
+		if( cache_mod[i] == mod )
+			return cache_rad[i];
+	}
+
+	hdr = (studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, mod );
+
+	if( !hdr )
+		return 0.0f;
+
+	for( i = 0; i < hdr->numbodyparts; i++ )
+	{
+		mstudiobodyparts_t *bp = (mstudiobodyparts_t *)((byte *)hdr + hdr->bodypartindex) + i;
+
+		for( j = 0; j < bp->nummodels; j++ )
+		{
+			mstudiomodel_t *sm = (mstudiomodel_t *)((byte *)hdr + bp->modelindex) + j;
+			const vec3_t *v = (const vec3_t *)((byte *)hdr + sm->vertindex);
+
+			for( k = 0; k < sm->numverts; k++ )
+			{
+				float len = sqrtf( v[k][0] * v[k][0] + v[k][1] * v[k][1] + v[k][2] * v[k][2] );
+
+				if( len > best )
+					best = len;
+			}
+		}
+	}
+
+	if( cache_n < 8 )
+	{
+		cache_mod[cache_n] = mod;
+		cache_rad[cache_n] = best;
+		cache_n++;
+	}
+
+	return best;
+}
+
 void R_DrawStudioModel( cl_entity_t *e )
 {
 	if( FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ))
@@ -3661,6 +3714,10 @@ void R_DrawViewModel( void )
 	if( r_drawviewmodel->value == 0 )
 		return;
 
+	// VR: the scope view shows the world only, no weapon
+	if( VR_ScopePass( ))
+		return;
+
 	if( ENGINE_GET_PARM( PARM_THIRDPERSON ))
 		return;
 
@@ -3703,6 +3760,7 @@ void R_DrawViewModel( void )
 				mstudioseqdesc_t *osd = (mstudioseqdesc_t *)((byte *)ohdr + ohdr->seqindex) + view->curstate.sequence;
 
 				VR_ReloadObserve( osd->label, view->curstate.animtime );
+				VR_LightObserve( osd->label );
 			}
 		}
 	}
