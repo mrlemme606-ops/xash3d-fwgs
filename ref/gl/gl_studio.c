@@ -145,6 +145,7 @@ static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
 static qboolean r_vr_viewmodel;	// the weapon is being drawn at the VR hand
 static cl_entity_t vr_lhand_ent;	// the universal left hand
+float r_sky_scale;		// > 0 while a sky model is drawn: shrinks it to fit the far clip plane
 static float r_vr_lscale;		// > 0: size of the left hand when it is drawn from the weapon model
 
 /*
@@ -558,6 +559,8 @@ static void R_StudioSetUpTransform( cl_entity_t *e )
 			scale = VR_GetViewModelScale();
 		else if( r_vr_viewmodel && e == &vr_lhand_ent )
 			scale = r_vr_lscale > 0.0f ? r_vr_lscale : VR_GetLeftHandScale();
+		else if( r_sky_scale > 0.0f )
+			scale = r_sky_scale;
 
 		Matrix3x4_CreateFromEntity( g_studio.rotationmatrix, angles, origin, scale );
 	}
@@ -3698,7 +3701,7 @@ void R_DrawViewModel( void )
 			{
 				mstudioseqdesc_t *osd = (mstudioseqdesc_t *)((byte *)ohdr + ohdr->seqindex) + view->curstate.sequence;
 
-				VR_ReloadObserve( osd->label );
+				VR_ReloadObserve( osd->label, view->curstate.animtime );
 			}
 		}
 	}

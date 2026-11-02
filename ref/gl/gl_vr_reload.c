@@ -87,7 +87,7 @@ static const char *rl_state_names[] = { "ready", "no magazine", "holding magazin
 
 enum { RLZ_NONE = 0, RLZ_MAG, RLZ_BOLT };
 
-static CVAR_DEFINE_AUTO( vr_rl_manual, "1", FCVAR_ARCHIVE, "1 = reload by hand (eject, magazine from your hip, bolt). 0 = the reload button just reloads" );
+static CVAR_DEFINE_AUTO( vr_rl_manual, "0", FCVAR_ARCHIVE, "1 = reload by hand (eject, magazine from your hip, bolt). 0 = the reload button just reloads, like the base game" );
 static CVAR_DEFINE_AUTO( vr_rl_debug, "0", 0, "print what the reload system is doing, and how far your left hand is from each grab zone" );
 static CVAR_DEFINE_AUTO( vr_rl_pouch_down, "26", FCVAR_ARCHIVE, "where the magazine pouch is: units below your head" );
 static CVAR_DEFINE_AUTO( vr_rl_pouch_side, "9", FCVAR_ARCHIVE, "where the magazine pouch is: units to your left (negative = right)" );
@@ -129,6 +129,8 @@ static struct
 	qboolean	need_release;	// the left trigger must be let go before it can grab again
 	qboolean	mag_clear;	// the hand has left the magazine well since it took the magazine out
 	double		mute_until, eject_time;
+	float		obs_anim;
+	int		shot_serial;
 	qboolean	mute_sent;
 	char		snd[RLE_COUNT][64];
 	qboolean	seen_reload;
@@ -477,10 +479,23 @@ void VR_ReloadSetGunPose( const vec3_t origin, const vec3_t angles, float scale 
 }
 
 // the animation the game itself plays on the viewmodel (before we replace it)
-void VR_ReloadObserve( const char *label )
+void VR_ReloadObserve( const char *label, float animtime )
 {
 	if( !label )
 		label = "";
+
+	// every new shooting animation is one shot fired (the engine puts a bullet hole where you aimed)
+	if( animtime != rl.obs_anim )
+	{
+		rl.obs_anim = animtime;
+
+		if(( RL_LabelHas( label, "shoot" ) || RL_LabelHas( label, "fire" ))
+			&& !RL_LabelHas( label, "empty" ) && !RL_LabelHas( label, "dry" ) && !RL_LabelHas( label, "noshot" ))
+		{
+			rl.shot_serial++;
+			gEngfuncs.Cvar_SetValue( "vr_in_shot", (float)rl.shot_serial );
+		}
+	}
 
 	Q_strncpy( rl.obs, label, sizeof( rl.obs ));
 	rl.obs_time = gp_cl->time;
@@ -489,7 +504,7 @@ void VR_ReloadObserve( const char *label )
 // 0 = not a zone bone, 1 = magazine, 2 = bolt
 int VR_ReloadBoneZone( const char *bonename )
 {
-	if( !rl.active || !rl.def || !rl.def->reload )
+	if( !rl.active || !rl.def || !rl.def->reload || !vr_rl_manual.value )
 		return RLZ_NONE;
 
 	if( RL_InList( rl.def->mag_bones, bonename ))
@@ -755,7 +770,7 @@ void VR_ReloadTick( void )
 
 	// the weapon has to have been drawn very recently, otherwise it is not in your hand (dead, holstered, menu)
 	gun_ok = ( gp_cl->time - rl.gun_time ) < 0.5;
-	rl.active = vr_rl_manual.value && rl.def && gun_ok && !in_menu;
+	rl.active = rl.def && gun_ok && !in_menu;
 
 	if( !rl.active )
 	{
@@ -808,9 +823,20 @@ void VR_ReloadTick( void )
 		rl.twohand = false;
 	}
 
-	// weapons without manual reloading: only the two-handed grip
-	if( !rl.def->reload )
+	// weapons without manual reloading, or manual reloading switched off: only the two-handed grip
+	if( !rl.def->reload || !vr_rl_manual.value )
 	{
+		if( rl.state != RL_READY )
+			RL_SetState( RL_READY );
+
+		rl.bolt_off = 0.0f;
+
+		if( rl.mute_sent )
+		{
+			rl.mute_sent = false;
+			gEngfuncs.Cvar_SetValue( "vr_rl_mute_on", 0.0f );
+		}
+
 		if( near_gun )
 			mask |= 1 << RLB_LGRIP;
 

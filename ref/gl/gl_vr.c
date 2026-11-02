@@ -127,9 +127,10 @@ static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotat
 static CVAR_DEFINE_AUTO( vr_flip_vfov, "0", FCVAR_ARCHIVE, "diagnostic: swap the up and down field of view. Try 1 if what is drawn sits a little too low or high compared to the menu pointer" );
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.30", FCVAR_ARCHIVE, "meters below your recentered height that count as physically crouching (you stand up again at 60% of this)" );
-static CVAR_DEFINE_AUTO( vr_crouch_comp, "34", FCVAR_ARCHIVE, "how many units the game lowers the view when the character crouches; your own crouch is not counted twice" );
+static CVAR_DEFINE_AUTO( vr_crouch_comp, "0", FCVAR_ARCHIVE, "0 = measured automatically. > 0 = give back this fixed number of units when you crouch (the old way)" );
 static CVAR_DEFINE_AUTO( vr_nofreeze_models, "camera+branch", 0, "weapons that are never held in the idle pose (their own animation is used): part of the file name, + between names" );
-static CVAR_DEFINE_AUTO( vr_sky_models, "0", 0, "1 = draw the sky models the maps use (sky_sphere_*.mdl) around you instead of the black sky box" );
+static CVAR_DEFINE_AUTO( vr_vm_rot_local, "1", FCVAR_ARCHIVE, "1 = the weapon's pitch/yaw/roll turn in the hand's own axes. 0 = the old way (added to world angles)" );
+static CVAR_DEFINE_AUTO( vr_sky_models, "1", FCVAR_ARCHIVE, "1 = draw the sky models the maps use (sky_sphere_*.mdl) around you instead of the black sky box" );
 static CVAR_DEFINE_AUTO( vr_hide_crosshair, "1", FCVAR_ARCHIVE, "1 = switch the game's crosshair off (the laser and red cross are your aim)" );
 static CVAR_DEFINE_AUTO( vr_physical_crouch, "1", FCVAR_ARCHIVE, "1 = crouching in real life also crouches the character, so you can get through low gaps" );
 static CVAR_DEFINE_AUTO( vr_use_fbo, "0", 0, "1 = render each eye into its own buffer at SteamVR's recommended size (experimental). 0 = render in the window and copy" );
@@ -392,6 +393,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_comp );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hide_crosshair );
 	gEngfuncs.Cvar_RegisterVariable( &vr_sky_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_vm_rot_local );
 	gEngfuncs.Cvar_RegisterVariable( &vr_nofreeze_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_physical_crouch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_finish );
@@ -911,10 +913,15 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 
 	// the weapon's own yaw / pitch / roll are turned in the hand's own axes (adding them to world angles goes
 	// wild when the hand is tilted): yaw around the hand's up, then pitch around its side, then roll along it
+	if( vr_vm_rot_local.value )
+	{
 	VR_RotateAxis( bf, bu, vr_vm_yaw.value + ry );
 	VR_RotateAxis( bl, bu, vr_vm_yaw.value + ry );
 	VR_RotateAxis( bf, bl, vr_vm_pitch.value + rp );
 	VR_RotateAxis( bu, bl, vr_vm_pitch.value + rp );
+	}
+
+	if( vr_vm_rot_local.value )
 	{
 		float rolloff = vr_vm_roll.value + rr;
 
@@ -934,9 +941,19 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 		roll = -roll;
 
 	// the game stores the viewmodel's pitch negated, the studio renderer undoes that
-	angles[PITCH] = -pitch;
-	angles[YAW] = yaw;
-	angles[ROLL] = roll;
+	if( vr_vm_rot_local.value )
+	{
+		angles[PITCH] = -pitch;
+		angles[YAW] = yaw;
+		angles[ROLL] = roll;
+	}
+	else
+	{
+		angles[PITCH] = -( pitch + vr_vm_pitch.value + rp );
+		angles[YAW] = yaw + vr_vm_yaw.value + ry;
+		angles[ROLL] = roll + vr_vm_roll.value + rr;
+	}
+
 	return true;
 }
 
@@ -1698,11 +1715,33 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 
 		crouch = vr_physical_crouch.value && vr.crouching;
 
-		// the game lowers its view when the character crouches, as slowly as it likes. we give that height back
-		// so the view follows your real head only
-		target = crouch ? vr_crouch_comp.value : 0.0f;
-		step = vr_crouch_comp.value * bound( 0.001f, (float)gp_host->frametime, 0.1f ) / 0.35f;
-		vr.crouch_comp += bound( -step, target - vr.crouch_comp, step );
+		// the game lowers its view when the character crouches, in its own time. the engine measures exactly how much,
+		// and we give that height back, so the view follows your real head only
+		{
+			static cvar_t *cv_drop;
+			float drop;
+
+			if( !cv_drop )
+				cv_drop = gEngfuncs.pfnGetCvarPointer( "vr_in_duck_drop" );
+
+			drop = cv_drop ? cv_drop->value : 0.0f;
+			target = drop;
+			step = 0.0f;
+
+			// vr_crouch_comp > 0 forces a fixed amount instead (the old way)
+			if( vr_crouch_comp.value > 0.0f )
+			{
+				target = crouch ? vr_crouch_comp.value : 0.0f;
+				step = vr_crouch_comp.value * bound( 0.001f, (float)gp_host->frametime, 0.1f ) / 0.35f;
+			}
+
+			if( step > 0.0f )
+				vr.crouch_comp += bound( -step, target - vr.crouch_comp, step );
+			else if( crouch || vr.crouch_comp > 0.5f )
+				vr.crouch_comp = target;	// while you crouch, and until the game has stood up again
+			else
+				vr.crouch_comp = 0.0f;
+		}
 
 		while( rel > 180.0f ) rel -= 360.0f;
 		while( rel < -180.0f ) rel += 360.0f;

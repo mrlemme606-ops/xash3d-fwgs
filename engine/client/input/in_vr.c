@@ -55,6 +55,8 @@ static CVAR_DEFINE_AUTO( vr_in_buttons, "0", 0, "(internal) button bitmask" );
 static CVAR_DEFINE_AUTO( vr_in_hit_x, "0", 0, "(internal) where the hand ray hit the world" );
 static CVAR_DEFINE_AUTO( vr_in_hit_y, "0", 0, "(internal)" );
 static CVAR_DEFINE_AUTO( vr_in_hit_z, "0", 0, "(internal)" );
+static CVAR_DEFINE_AUTO( vr_in_shot, "0", 0, "(internal) counts the shots the weapon in hand has fired" );
+static CVAR_DEFINE_AUTO( vr_in_duck_drop, "0", 0, "(internal) how many units the game has lowered the view for the character's own crouch" );
 static CVAR_DEFINE_AUTO( vr_in_hit_ok, "0", 0, "(internal) the hand ray hits the world" );
 static CVAR_DEFINE_AUTO( vr_bullet_holes, "1", FCVAR_ARCHIVE, "1 = a bullet hole appears where the hand ray hits when you fire a gun (to see where you aim)" );
 static CVAR_DEFINE_AUTO( vr_in_mask, "0", 0, "(internal) buttons the reload system keeps away from the game" );
@@ -122,6 +124,7 @@ static qboolean vr_crouch_toggled;
 static int vr_jump_frames;
 static qboolean vr_dir_down[4];	// forward, back, left, right (with hysteresis)
 static int vr_last_movetype = -1;
+static qboolean vr_last_boat;
 static qboolean vr_swing_armed = true;	// the hand has to slow down before the next swing counts
 static double vr_whip_until;
 static double vr_use_until;	// the use key was pressed: aim it until this time
@@ -224,6 +227,8 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_hit_y );
 	Cvar_RegisterVariable( &vr_in_hit_z );
 	Cvar_RegisterVariable( &vr_in_hit_ok );
+	Cvar_RegisterVariable( &vr_in_shot );
+	Cvar_RegisterVariable( &vr_in_duck_drop );
 	Cvar_RegisterVariable( &vr_bullet_holes );
 	Cvar_RegisterVariable( &vr_in_noswing );
 	Cvar_RegisterVariable( &vr_in_reload );
@@ -363,7 +368,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	float x, y, fwd, side;
 	float head_rel, aim_rel, aim_pitch, rot;
 	int buttons, mode;
-	qboolean in_game, on_ladder, digital;
+	qboolean in_game, on_ladder, on_boat, digital;
 
 	{
 		// the game's own inventory / save screens keep key_game but show a mouse cursor
@@ -493,18 +498,28 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	}
 
 	// a bullet hole where the hand ray hits the world, so you can see where you are aiming
-	if( in_game && vr_bullet_holes.value && vr_in_hit_ok.value > 0.5f && vr_in_melee.value < 0.5f
-		&& FBitSet( buttons & ~vr_prev_buttons, BIT( VRB_RTRIGGER )))
+	// (only when the weapon really fired: the renderer counts the shooting animations)
 	{
-		char name[16];
-		vec3_t pos = { vr_in_hit_x.value, vr_in_hit_y.value, vr_in_hit_z.value };
-		int id;
+		static int last_shot;
+		int shot = (int)vr_in_shot.value;
 
-		Q_snprintf( name, sizeof( name ), "{shot%d", COM_RandomLong( 1, 5 ));
-		id = CL_DecalIndexFromName( name );
+		if( shot != last_shot )
+		{
+			last_shot = shot;
 
-		if( id )
-			CL_DecalShoot( CL_DecalIndex( id ), 0, 0, pos, 0 );
+			if( in_game && vr_bullet_holes.value && vr_in_hit_ok.value > 0.5f && vr_in_melee.value < 0.5f )
+			{
+				char name[16];
+				vec3_t pos = { vr_in_hit_x.value, vr_in_hit_y.value, vr_in_hit_z.value };
+				int id;
+
+				Q_snprintf( name, sizeof( name ), "{shot%d", COM_RandomLong( 1, 5 ));
+				id = CL_DecalIndexFromName( name );
+
+				if( id )
+					CL_DecalShoot( CL_DecalIndex( id ), 0, 0, pos, 0 );
+			}
+		}
 	}
 
 	if( Cvar_VariableValue( "vr_aim_debug" ) > 0.0f && (( buttons & ~vr_prev_buttons ) & ( BIT( VRB_RTRIGGER ) | BIT( VRB_RGRIP ))))
@@ -533,7 +548,33 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		Con_Printf( "VR: movetype is now %d\n", vr_last_movetype );
 	}
 
-	digital = vr_move_digital.value && ( on_ladder || fabs( rot ) < 15.0f );
+	// boats, trains and lifts: you stand on another entity. these also need real key presses
+	on_boat = false;
+
+	if( clgame.pmove && clgame.pmove->onground > 0 && clgame.pmove->onground < clgame.pmove->numphysent )
+		on_boat = !clgame.pmove->physents[clgame.pmove->onground].player;
+
+	if( vr_debug_move.value && on_boat != vr_last_boat )
+	{
+		vr_last_boat = on_boat;
+		Con_Printf( "VR: standing on another entity: %d (%s)\n", on_boat,
+			on_boat ? clgame.pmove->physents[clgame.pmove->onground].name : "-" );
+	}
+
+	// vr_move_digital 0 is the normal analog walking, but ladders and boats need the keys: switch for as long as you are on one
+	digital = ( vr_move_digital.value || on_ladder || on_boat ) && ( on_ladder || on_boat || fabs( rot ) < 15.0f );
+
+	// how much the game has lowered the view for its own crouch (the renderer gives it back, so only your real head counts)
+	if( clgame.pmove )
+	{
+		static float stand_height;
+		float h = clgame.pmove->view_ofs[2] - clgame.pmove->player_mins[clgame.pmove->usehull][2];
+
+		if( h > stand_height )
+			stand_height = h;
+
+		Cvar_DirectSetValue( &vr_in_duck_drop, bound( 0.0f, stand_height - h, 60.0f ));
+	}
 
 	// right stick flicks: up = jump (a short key press), down = toggle crouch
 	y = vr_in_stick_y.value;

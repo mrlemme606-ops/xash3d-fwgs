@@ -823,6 +823,7 @@ R_DrawEntitiesOnList
 */
 // Cry of Fear draws its sky as models (sky_sphere_*.mdl, sky_blixt.mdl...) that are centered on the viewer
 qboolean r_vr_skydome;
+extern float r_sky_scale;
 
 static qboolean R_IsSkyModel( const cl_entity_t *e )
 {
@@ -854,12 +855,31 @@ static void R_DrawSkyModels( void )
 		RI.currententity = e;
 		RI.currentmodel = e->model;
 
+		// the sky models are bigger than the far clip plane. shrink them to fit inside it
+		{
+			float rad = 0.0f, want = Q_min( RI.farClip * 0.6f, 3000.0f );
+			int k;
+
+			for( k = 0; k < 3; k++ )
+				rad = Q_max( rad, Q_max( fabs( e->model->mins[k] ), fabs( e->model->maxs[k] )));
+
+			r_sky_scale = ( rad > want && rad > 1.0f ) ? want / rad : 1.0f;
+		}
+
+		// the first one also clears the picture, so nothing of the last frame can smear into the sky
+		if( !r_vr_skydome )
+		{
+			pglClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
+			pglClear( GL_COLOR_BUFFER_BIT );
+		}
+
 		// behind everything: the world is drawn over it afterwards
 		pglDepthFunc( GL_ALWAYS );
 		pglDepthMask( GL_FALSE );
 		R_DrawStudioModel( e );
 		pglDepthMask( GL_TRUE );
 		pglDepthFunc( GL_LEQUAL );
+		r_sky_scale = 0.0f;
 
 		VectorCopy( saved, e->origin );
 		r_vr_skydome = true;

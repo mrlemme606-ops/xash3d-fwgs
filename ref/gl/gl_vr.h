@@ -81,7 +81,7 @@ typedef struct
 void VR_ReloadInitCvars( void );
 void VR_ReloadTick( void );
 void VR_ReloadSetGunPose( const vec3_t origin, const vec3_t angles, float scale );
-void VR_ReloadObserve( const char *label );
+void VR_ReloadObserve( const char *label, float animtime );
 int VR_ReloadBoneZone( const char *bonename );
 void VR_ReloadZoneAccum( int zone, const float *pos );
 void VR_ReloadZoneFlush( void );

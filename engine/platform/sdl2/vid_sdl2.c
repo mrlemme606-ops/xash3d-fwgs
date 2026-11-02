@@ -966,10 +966,17 @@ rserr_t R_ChangeDisplaySettings( int width, int height, window_mode_t window_mod
 	rserr_t err;
 
 	// VR: the menus are laid out for the window, so always use the same one (launch option -vrwindow)
+	// -vrwindow [size]: a square window (size x size, default 1440), the same shape as a headset's view.
+	// each eye is copied out of it, so a bigger size means a sharper picture
 	if( Sys_CheckParm( "-vrwindow" ))
 	{
-		width = 1920;
-		height = 1080;
+		char arg[16] = { 0 };
+		int size = 1440;
+
+		if( Sys_GetParmFromCmdLine( "-vrwindow", arg ) && Q_atoi( arg ) >= 512 )
+			size = Q_atoi( arg );
+
+		width = height = size;
 		window_mode = WINDOW_MODE_WINDOWED;
 	}
 
