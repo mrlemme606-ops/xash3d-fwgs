@@ -137,12 +137,12 @@ static CVAR_DEFINE_AUTO( vr_light_yaw, "0", 0, "turn the spotlight left (+) or r
 static CVAR_DEFINE_AUTO( vr_flare_time, "0", 0, "seconds a flare burns (0 = by difficulty: 120 / 90 / 60 / 30)" );
 static CVAR_DEFINE_AUTO( vr_vm_mirror, "-1", 0, "mirror the weapon in hand left-right: -1 = automatic (vr_mirror_models), 0 = never, 1 = always (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_mirror_models, "flare", 0, "weapon model names (separated by +) that the game holds in the left hand, mirrored to the right" );
-static CVAR_DEFINE_AUTO( vr_vm_maxsize, "60", 0, "a weapon model reaching further than this many units from your hand gets pulled into your hand and shrunk automatically (0 = off)" );
-static CVAR_DEFINE_AUTO( vr_vm_gamescale, "1", 0, "1 = also apply the scale the game itself sets on the weapon model" );
-static CVAR_DEFINE_AUTO( vr_eye_prepass, "0", FCVAR_ARCHIVE, "1 = draw the left eye twice and keep the second picture (a test for objects that are black in one eye when the game's opengl32.dll is used)" );
+static CVAR_DEFINE_AUTO( vr_eye_prepass, "0", FCVAR_ARCHIVE, "draw an eye twice and keep the second picture (for objects that are black in one eye, or a sky that lags, when the game's opengl32.dll is used): 1 = left eye twice, 2 = both eyes twice" );
+static CVAR_DEFINE_AUTO( vr_roomscale, "1", FCVAR_ARCHIVE, "1 = your character walks to where you really stand in your room" );
+static CVAR_DEFINE_AUTO( vr_room_deadzone, "4", FCVAR_ARCHIVE, "how far (game units, about 2.5 cm each) you have to step before your character follows" );
 static CVAR_DEFINE_AUTO( vr_light_debug, "1", 0, "1 = print the animation name of a phone / flashlight / flare whenever it changes (to tune vr_light_on_seq / vr_light_off_seq)" );
 static CVAR_DEFINE_AUTO( vr_light_on_seq, "flash+_on+burn+ignite+light_on+idle_lit", 0, "animation name fragments (separated by +) that mean the light is ON" );
-static CVAR_DEFINE_AUTO( vr_light_off_seq, "sms+_off+unlit+extinguish+light_off+flare_idle", 0, "animation name fragments (separated by +) that mean the light is OFF" );
+static CVAR_DEFINE_AUTO( vr_light_off_seq, "sms+_off+unlit+extinguish+light_off+flare_idle+throw", 0, "animation name fragments (separated by +) that mean the light is OFF" );
 static CVAR_DEFINE_AUTO( vr_light_x, "6", 0, "where the light sits, forward of the hand (weapon axes, saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_light_y, "0", 0, "where the light sits, left of the hand (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_light_z, "0", 0, "where the light sits, above the hand (saved per weapon)" );
@@ -150,7 +150,6 @@ static CVAR_DEFINE_AUTO( vr_kill_body_light, "1", 0, "1 = while you hold a phone
 static CVAR_DEFINE_AUTO( vr_scope, "1", FCVAR_ARCHIVE, "1 = rifle scope: lift the rifle to your eye and the scope shows a zoomed view" );
 static CVAR_DEFINE_AUTO( vr_scope_models, "rifle+sniper+hunting", 0, "weapon model names (separated by +) that have a scope" );
 static CVAR_DEFINE_AUTO( vr_scope_fov, "2", 0, "field of view of the scope image in degrees (smaller = more zoom, saved per weapon)" );
-static CVAR_DEFINE_AUTO( vr_scope_size, "512", 0, "resolution of the scope image" );
 static CVAR_DEFINE_AUTO( vr_scope_x, "0.4", 0, "scope eyepiece position, forward of the hand (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_scope_y, "-0.3", 0, "scope eyepiece position, left of the hand (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_scope_z, "2.5", 0, "scope eyepiece position, above the hand (saved per weapon)" );
@@ -428,6 +427,8 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_comp );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hide_crosshair );
 	gEngfuncs.Cvar_RegisterVariable( &vr_sky_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_roomscale );
+	gEngfuncs.Cvar_RegisterVariable( &vr_room_deadzone );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_on_seq );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_off_seq );
@@ -438,7 +439,6 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_fov );
-	gEngfuncs.Cvar_RegisterVariable( &vr_scope_size );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_x );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_y );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_z );
@@ -451,8 +451,6 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_flare_time );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_mirror );
 	gEngfuncs.Cvar_RegisterVariable( &vr_mirror_models );
-	gEngfuncs.Cvar_RegisterVariable( &vr_vm_maxsize );
-	gEngfuncs.Cvar_RegisterVariable( &vr_vm_gamescale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_eye_prepass );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_rot_local );
 	gEngfuncs.Cvar_RegisterVariable( &vr_nofreeze_models );
@@ -687,13 +685,6 @@ static float vr_light_last_anim, vr_toggle_time, vr_equip_time, vr_flare_end;
 static char vr_tune_model[64];
 static qboolean vr_vm_mirror_auto;
 static qboolean vr_pose_axes_ok;	// the weapon can be drawn straight from its axes (no flip_roll)
-// automatic fitting of weapon models that are huge or far from the hand
-static qboolean vr_auto_done;
-static float vr_auto_factor = 1.0f;
-static vec3_t vr_auto_shift;
-static int vr_auto_frames;
-static vec3_t vr_fit_min, vr_fit_max;
-static int vr_fit_n;
 // axes of the weapon in hand, from the last pose
 static qboolean vr_pose_valid;
 static vec3_t vr_pose_f, vr_pose_l, vr_pose_u;
@@ -952,7 +943,6 @@ static qboolean VR_TwoHandBasis( vec3_t f, vec3_t l, vec3_t u )
 
 qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 {
-	vec3_t shift;
 	float xy, pitch, yaw, roll;
 	float gx, gy, gz, rp, ry, rr;
 	vec3_t bf, bl, bu;
@@ -988,16 +978,6 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 		VectorCopy( vr.hand[1].up, bu );
 	}
 
-	VectorScale( bf, gx, shift );
-	origin[0] = vr.hand[1].pos[0] - shift[0];
-	origin[1] = vr.hand[1].pos[1] - shift[1];
-	origin[2] = vr.hand[1].pos[2] - shift[2];
-
-	VectorScale( bl, gy, shift );
-	VectorSubtract( origin, shift, origin );
-	VectorScale( bu, gz, shift );
-	VectorSubtract( origin, shift, origin );
-
 	// the weapon's own yaw / pitch / roll are turned in the hand's own axes (adding them to world angles goes
 	// wild when the hand is tilted): yaw around the hand's up, then pitch around its side, then roll along it
 	if( vr_vm_rot_local.value )
@@ -1019,10 +999,12 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 		VR_RotateAxis( bu, bf, rolloff );
 	}
 
-	// automatic fit (weapons that are far from the hand): shifted along the weapon's own axes
-	VectorMA( origin, vr_auto_shift[0], bf, origin );
-	VectorMA( origin, vr_auto_shift[1], bl, origin );
-	VectorMA( origin, vr_auto_shift[2], bu, origin );
+	// the grip offsets are in the weapon's own frame, so yaw / pitch / roll turn the weapon around the spot you
+	// hold it, not around the model's origin (that swung it away from the hand when the angle was large)
+	VectorCopy( vr.hand[1].pos, origin );
+	VectorMA( origin, -gx, bf, origin );
+	VectorMA( origin, -gy, bl, origin );
+	VectorMA( origin, -gz, bu, origin );
 
 	xy = sqrt( bf[0] * bf[0] + bf[1] * bf[1] );
 	pitch = RAD2DEG( atan2( -bf[2], xy ));
@@ -1070,9 +1052,9 @@ static void VR_Center_f( void )
 	gEngfuncs.Con_Printf( "VR: centering the weapon in your hand (run vr_weapon_save afterwards to keep it)\n" );
 }
 
-qboolean VR_EyePrepass( void )
+int VR_EyePrepass( void )
 {
-	return vr_eye_prepass.value != 0.0f;
+	return bound( 0, (int)vr_eye_prepass.value, 2 );
 }
 
 qboolean VR_SkyModelsOn( void )
@@ -1139,18 +1121,8 @@ void VR_CenterFinish( void )
 
 float VR_GetViewModelScale( void )
 {
-	float scale = bound( 0.02f, vr_vm_scale.value, 2.0f );
-
-	if( tr.viewent && vr_vm_gamescale.value )
-	{
-		// some models (the camera, the branch) are made huge and the game scales them down itself
-		float gs = tr.viewent->curstate.scale;
-
-		if( gs > 0.001f && gs <= 16.0f )
-			scale *= gs;
-	}
-
-	return scale * vr_auto_factor;
+	// down to 0.002: some models (the camera) are hundreds of units large
+	return bound( 0.002f, vr_vm_scale.value, 2.0f );
 }
 
 // the weapon's axes as they were set by the last pose: drawing from these avoids the trouble Euler angles
@@ -1171,82 +1143,6 @@ qboolean VR_ViewModelMirror( void )
 	return vr_vm_mirror.value > 0.5f || ( vr_vm_mirror.value < 0.0f && vr_vm_mirror_auto );
 }
 
-qboolean VR_AutoFitWanted( void )
-{
-	return vr_vm_maxsize.value > 0.0f && !vr_auto_done;
-}
-
-void VR_AutoFitAccum( const float *p )
-{
-	int i;
-
-	if( !vr_fit_n )
-	{
-		VectorCopy( p, vr_fit_min );
-		VectorCopy( p, vr_fit_max );
-	}
-
-	for( i = 0; i < 3; i++ )
-	{
-		if( p[i] < vr_fit_min[i] ) vr_fit_min[i] = p[i];
-		if( p[i] > vr_fit_max[i] ) vr_fit_max[i] = p[i];
-	}
-
-	vr_fit_n++;
-}
-
-// once per frame: is the weapon model far from the hand or huge? then pull it in and shrink it
-static void VR_AutoFitFrame( void )
-{
-	vec3_t c, half, d;
-	float radius, dist, maxsize = vr_vm_maxsize.value;
-	int i;
-
-	if( !VR_AutoFitWanted( ) || !vr.hand[1].valid || !vr_pose_valid )
-	{
-		vr_fit_n = 0;
-		return;
-	}
-
-	// wait until the draw animation is over
-	if( vr_fit_n < 8 || gp_cl->time < vr_equip_time + 1.5f )
-	{
-		vr_fit_n = 0;
-		return;
-	}
-
-	for( i = 0; i < 3; i++ )
-	{
-		c[i] = ( vr_fit_min[i] + vr_fit_max[i] ) * 0.5f;
-		half[i] = ( vr_fit_max[i] - vr_fit_min[i] ) * 0.5f;
-	}
-
-	vr_fit_n = 0;
-	radius = VectorLength( half );
-	VectorSubtract( vr.hand[1].pos, c, d );
-	dist = VectorLength( d );
-
-	if( !vr_auto_frames && dist < 30.0f && radius < maxsize )
-	{
-		vr_auto_done = true;	// an ordinary weapon
-		return;
-	}
-
-	vr_auto_frames++;
-	vr_auto_shift[0] += 0.5f * DotProduct( d, vr_pose_f );
-	vr_auto_shift[1] += 0.5f * DotProduct( d, vr_pose_l );
-	vr_auto_shift[2] += 0.5f * DotProduct( d, vr_pose_u );
-
-	if( radius > maxsize )
-		vr_auto_factor *= bound( 0.4f, maxsize / radius, 1.0f );
-
-	if( vr_auto_frames > 150 || ( dist < 2.0f && radius <= maxsize ))
-	{
-		vr_auto_done = true;
-		gEngfuncs.Con_Printf( "VR: %s was far from your hand or huge, so it was fitted automatically (shift %.1f %.1f %.1f, size x%.2f)\n",
-			vr_tune_model, vr_auto_shift[0], vr_auto_shift[1], vr_auto_shift[2], vr_auto_factor );
-	}
-}
 
 static qboolean VR_ContainsNoCase( const char *s, const char *frag )
 {
@@ -1646,7 +1542,13 @@ static void VR_UpdateWeaponProfile( void )
 	int i;
 
 	if( !tr.viewent || !tr.viewent->model )
+	{
+		// nothing in hand (new map, menu): forget the weapon, so a stale light cannot stay on
+		vr_tune_model[0] = 0;
+		vr_vm_light = vr_vm_omni = vr_vm_flare = vr_vm_scope = false;
+		vr_light_state = -1;
 		return;
+	}
 
 	model = tr.viewent->model->name;
 
@@ -1684,11 +1586,6 @@ static void VR_UpdateWeaponProfile( void )
 		vr_light_label[0] = 0;
 		vr_vm_mirror_auto = VR_ListMatches( vr_mirror_models.string, base, true );
 		vr_equip_time = gp_cl->time;
-		vr_auto_done = false;
-		vr_auto_factor = 1.0f;
-		VectorClear( vr_auto_shift );
-		vr_auto_frames = 0;
-		vr_fit_n = 0;
 		gEngfuncs.Cvar_SetValue( "vr_in_melee", vr_vm_melee ? 1.0f : 0.0f );
 	}
 
@@ -1756,11 +1653,8 @@ static void VR_VMInfo_f( void )
 		return;
 	}
 
-	gEngfuncs.Con_Printf( "weapon model %s: game scale %.3f, renderfx %d, rendermode %d, bone-space size %.1f\n",
-		v->model->name, v->curstate.scale, v->curstate.renderfx, v->curstate.rendermode, R_StudioModelRadius( v->model ));
-	gEngfuncs.Con_Printf( "  scale used %.3f (vr_vm_scale %.2f, auto x%.2f), mirror %s\n", VR_GetViewModelScale(), vr_vm_scale.value,
-		vr_auto_factor, VR_ViewModelMirror() ? "yes" : "no" );
-	gEngfuncs.Con_Printf( "  auto-fit %s, shift %.1f %.1f %.1f\n", vr_auto_done ? "finished" : "waiting / working", vr_auto_shift[0], vr_auto_shift[1], vr_auto_shift[2] );
+	gEngfuncs.Con_Printf( "weapon model %s: bone-space size %.1f (glock is 24), scale used %.3f, mirror %s\n", v->model->name,
+		R_StudioModelRadius( v->model ), VR_GetViewModelScale(), VR_ViewModelMirror() ? "yes" : "no" );
 }
 
 static void VR_GLInfo_f( void )
@@ -1860,13 +1754,13 @@ static void VR_SkyInfo_f( void )
 
 #define VR_LIGHT_KEY	0x5652	// so we always reuse the same dynamic light
 
-static dlight_t *VR_AllocLight( void )
+static dlight_t *VR_AllocLightKey( int key )
 {
 	int i, freeslot = -1;
 
 	for( i = 0; i < MAX_DLIGHTS; i++ )
 	{
-		if( gp_dlights[i].key == VR_LIGHT_KEY )
+		if( gp_dlights[i].key == key )
 			return &gp_dlights[i];
 
 		if( freeslot < 0 && ( gp_dlights[i].die < gp_cl->time || !gp_dlights[i].radius ))
@@ -1877,8 +1771,13 @@ static dlight_t *VR_AllocLight( void )
 		return NULL;
 
 	memset( &gp_dlights[freeslot], 0, sizeof( dlight_t ));
-	gp_dlights[freeslot].key = VR_LIGHT_KEY;
+	gp_dlights[freeslot].key = key;
 	return &gp_dlights[freeslot];
+}
+
+static dlight_t *VR_AllocLight( void )
+{
+	return VR_AllocLightKey( VR_LIGHT_KEY );
 }
 
 // the last place in "label" where one of the +separated fragments in "list" ends (-1 = no fragment found)
@@ -1914,6 +1813,111 @@ static int VR_LastMatchEnd( const char *list, const char *label )
 	}
 
 	return best;
+}
+
+// ---- a thrown, burning flare: the game's own light for it needs its opengl32.dll, so we light it ourselves
+static int vr_thrown_ent;		// entity number of the thrown flare, 0 = looking for it
+static qboolean vr_thrown_on;
+static float vr_thrown_end;
+static vec3_t vr_thrown_pos;
+static int vr_thrown_known[96], vr_thrown_nknown;
+
+static cl_entity_t *VR_FlareEntities( int *iter )
+{
+	// walks the visible entities that look like flares (not the ones in your hand or on your body)
+	for( ; tr.draw_list && *iter < tr.draw_list->num_solid_entities + tr.draw_list->num_trans_entities; )
+	{
+		int n = *iter, ns = tr.draw_list->num_solid_entities;
+		cl_entity_t *e = n < ns ? tr.draw_list->solid_entities[n] : tr.draw_list->trans_entities[n - ns];
+
+		( *iter )++;
+
+		if( !e || !e->model || e->model->type != mod_studio || e == tr.viewent || e->player )
+			continue;
+
+		if( VR_ContainsNoCase( e->model->name, "flare" ) && !VR_ContainsNoCase( e->model->name, "/v_" ) && !VR_ContainsNoCase( e->model->name, "/p_" ))
+			return e;
+	}
+
+	return NULL;
+}
+
+static void VR_ThrownFlareStart( void )
+{
+	cl_entity_t *e;
+	int it = 0;
+
+	// remember the flares lying around now, the thrown one is the one that appears next
+	vr_thrown_nknown = 0;
+
+	while(( e = VR_FlareEntities( &it )) != NULL && vr_thrown_nknown < 96 )
+		vr_thrown_known[vr_thrown_nknown++] = e->index;
+
+	vr_thrown_ent = 0;
+	vr_thrown_on = true;
+	vr_thrown_end = vr_flare_end;
+	VectorCopy( vr.hand[1].pos, vr_thrown_pos );
+}
+
+static void VR_UpdateThrownFlare( const ref_viewpass_t *game )
+{
+	cl_entity_t *e;
+	dlight_t *dl;
+	int it = 0, i;
+
+	if( !vr_thrown_on )
+		return;
+
+	if( gp_cl->time > vr_thrown_end || gp_cl->time < vr_thrown_end - 200.0f )
+	{
+		vr_thrown_on = false;
+		return;
+	}
+
+	while(( e = VR_FlareEntities( &it )) != NULL )
+	{
+		vec3_t d;
+
+		if( vr_thrown_ent )
+		{
+			if( e->index == vr_thrown_ent )
+			{
+				VectorCopy( e->origin, vr_thrown_pos );
+				break;
+			}
+
+			continue;
+		}
+
+		for( i = 0; i < vr_thrown_nknown; i++ )
+		{
+			if( vr_thrown_known[i] == e->index )
+				break;
+		}
+
+		VectorSubtract( e->origin, game->vieworigin, d );
+
+		if( i == vr_thrown_nknown && VectorLength( d ) < 700.0f )
+		{
+			vr_thrown_ent = e->index;
+			VectorCopy( e->origin, vr_thrown_pos );
+			break;
+		}
+	}
+
+	if( !vr_thrown_ent )
+		return;	// not seen yet
+
+	if(( dl = VR_AllocLightKey( VR_LIGHT_KEY + 1 )) != NULL )
+	{
+		VectorCopy( vr_thrown_pos, dl->origin );
+		dl->origin[2] += 4.0f;
+		dl->radius = vr_omni_radius.value;
+		dl->color.r = 255;
+		dl->color.g = 70;
+		dl->color.b = 40;
+		dl->die = gp_cl->time + 0.05f;
+	}
 }
 
 // seconds a flare burns, by difficulty
@@ -1969,6 +1973,10 @@ void VR_LightObserve( const char *label, float animtime )
 		if( vr_vm_flare && vr_light_state == 1 && prev != 1 && gp_cl->time >= vr_flare_end )
 			vr_flare_end = gp_cl->time + VR_FlareBurnTime();
 
+		// a lit flare that was thrown keeps burning where it lands
+		if( vr_vm_flare && prev == 1 && vr_light_state == 0 && gp_cl->time < vr_flare_end && VR_ContainsNoCase( label, "throw" ))
+			VR_ThrownFlareStart();
+
 		if( vr_light_debug.value )
 			gEngfuncs.Con_Printf( "VR light: animation '%s' -> light %s%s\n", label,
 				vr_light_state == 1 ? "ON" : vr_light_state == 0 ? "OFF" : "unknown",
@@ -2012,7 +2020,7 @@ static void VR_KillBodyLights( const ref_viewpass_t *game )
 	{
 		vec3_t d;
 
-		if( gp_dlights[i].key == VR_LIGHT_KEY || gp_dlights[i].radius <= 0.0f || gp_dlights[i].die < gp_cl->time )
+		if( gp_dlights[i].key == VR_LIGHT_KEY || gp_dlights[i].key == VR_LIGHT_KEY + 1 || gp_dlights[i].radius <= 0.0f || gp_dlights[i].die < gp_cl->time )
 			continue;
 
 		VectorSubtract( gp_dlights[i].origin, game->vieworigin, d );
@@ -2033,7 +2041,21 @@ static void VR_UpdateHandLight( const ref_viewpass_t *game )
 	float dist, bright;
 	qboolean hit;
 
-	if( !vr_phone_light.value || !vr.hand[1].valid || ( !vr_vm_light && !vr_vm_omni ))
+	{
+		// a new map starts the clock again: forget the old flare
+		static float last_time;
+
+		if( gp_cl->time < last_time - 1.0f )
+		{
+			vr_flare_end = 0.0f;
+			vr_thrown_on = false;
+		}
+
+		last_time = gp_cl->time;
+	}
+
+	if( !vr_phone_light.value || !vr.hand[1].valid || ( !vr_vm_light && !vr_vm_omni )
+		|| !tr.viewent || !tr.viewent->model || Q_strcmp( tr.viewent->model->name, vr_tune_model ))
 		return;
 
 	VR_KillBodyLights( game );
@@ -2102,6 +2124,83 @@ static void VR_UpdateHandLight( const ref_viewpass_t *game )
 	dl->die = gp_cl->time + 0.05f;
 }
 
+/*
+=================
+Roomscale: when you step away from the spot you were recentered on, your character walks there too.
+The renderer measures the distance (vr_in_room_x/y, game axes), the engine turns it into walking
+(in_vr.c). While your character catches up, the view is kept exactly where your head is: the part of
+the walk that really happened is taken off the distance, so nothing visibly slides.
+=================
+*/
+static void VR_RoomFollow( const ref_viewpass_t *game )
+{
+	static vec3_t prev_vo, last_dir;
+	static qboolean prev_ok, following;
+	static float last_cmd_time;
+	vec3_t hp, dp;
+	float d, len;
+
+	if( !vr_roomscale.value || !vr_positional.value || !vr.have_ref )
+	{
+		prev_ok = following = false;
+		gEngfuncs.Cvar_SetValue( "vr_in_room_x", 0.0f );
+		gEngfuncs.Cvar_SetValue( "vr_in_room_y", 0.0f );
+		return;
+	}
+
+	d = game->viewangles[YAW] - vr.ref_yaw;
+
+	// the part of the walk we asked for: take it off the distance, so the view stays where the head is
+	if( prev_ok && gp_cl->time < last_cmd_time + 0.35f && gp_cl->time >= last_cmd_time )
+	{
+		VectorSubtract( game->vieworigin, prev_vo, dp );
+		dp[2] = 0.0f;
+
+		if( VectorLength( dp ) < 80.0f )
+		{
+			float moved = DotProduct( dp, last_dir );
+
+			if( moved > 0.0f )
+			{
+				vec3_t shift;
+
+				VectorScale( last_dir, moved, shift );
+				VR_RotateZ( shift, -d, shift );
+				vr.ref_pos[0] += shift[0];
+				vr.ref_pos[1] += shift[1];
+			}
+		}
+	}
+
+	VectorCopy( game->vieworigin, prev_vo );
+	prev_ok = true;
+
+	// how far is the head from the spot we recentered on (in game axes)?
+	VR_ConvPos( vr.head_pos, hp );
+	VectorSubtract( hp, vr.ref_pos, hp );
+	VR_RotateZ( hp, d, hp );
+	hp[2] = 0.0f;
+	len = VectorLength( hp );
+
+	if( !following && len > vr_room_deadzone.value )
+		following = true;
+	else if( following && len < vr_room_deadzone.value * 0.35f )
+		following = false;
+
+	if( following && len > 0.001f )
+	{
+		VectorScale( hp, 1.0f / len, last_dir );
+		last_cmd_time = gp_cl->time;
+		gEngfuncs.Cvar_SetValue( "vr_in_room_x", hp[0] );
+		gEngfuncs.Cvar_SetValue( "vr_in_room_y", hp[1] );
+	}
+	else
+	{
+		gEngfuncs.Cvar_SetValue( "vr_in_room_x", 0.0f );
+		gEngfuncs.Cvar_SetValue( "vr_in_room_y", 0.0f );
+	}
+}
+
 qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 {
 	const TrackedDevicePose_t *hmd;
@@ -2167,6 +2266,8 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 		vr.have_ref = true;
 	}
 
+	VR_RoomFollow( game );
+
 	{
 		float rel = RAD2DEG( atan2( vr.axis_fwd[1], vr.axis_fwd[0] )) - vr.ref_yaw;
 		float xy = sqrt( vr.axis_fwd[0] * vr.axis_fwd[0] + vr.axis_fwd[1] * vr.axis_fwd[1] );
@@ -2223,8 +2324,8 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 	VR_PublishAim( game );
 	VR_ReloadTick();
 	VR_HideCrosshair();
-	VR_AutoFitFrame();
 	VR_UpdateHandLight( game );
+	VR_UpdateThrownFlare( game );
 	VR_PublishUI();
 
 	return true;
@@ -2532,7 +2633,7 @@ static int vr_scope_tex_w, vr_scope_tex_h;
 static qboolean vr_scope_in_pass;
 static qboolean vr_scope_ready;
 static vec3_t vr_scope_pos, vr_scope_f, vr_scope_l, vr_scope_u;
-static int vr_scope_vp[4];	// the scope picture in window coordinates, as given to the renderer
+static float vr_scope_half_w = 0.28f;	// half the width of the middle square, as a fraction of the picture
 
 qboolean VR_ScopePass( void )
 {
@@ -2571,20 +2672,19 @@ static qboolean VR_ScopeCompute( void )
 	return true;
 }
 
-// called before the eyes are drawn: fills "out" with the scope's view when the scope is in use
+// called before the eyes are drawn: fills "out" with the scope's view when the scope is in use.
+// The picture is drawn exactly like an eye (the whole window), and the lens shows its middle square.
 qboolean VR_SetupScopeView( const ref_viewpass_t *game, ref_viewpass_t *out )
 {
-	float xy, fov;
-	int size;
+	float xy, fov, aspect;
 
 	vr_scope_ready = false;
 
 	if( !VR_ScopeCompute( ))
 		return false;
 
-	size = bound( 128, (int)vr_scope_size.value, 1024 );
-	size = Q_min( size, Q_min( gpGlobals->width, gpGlobals->height ));
-	fov = bound( 2.0f, vr_scope_fov.value, 60.0f );
+	fov = bound( 0.5f, vr_scope_fov.value, 60.0f );
+	aspect = (float)gpGlobals->width / (float)gpGlobals->height;
 
 	*out = *game;
 	VectorMA( vr_scope_pos, vr_scope_cam.value, vr_scope_f, out->vieworigin );
@@ -2594,12 +2694,9 @@ qboolean VR_SetupScopeView( const ref_viewpass_t *game, ref_viewpass_t *out )
 	out->viewangles[YAW] = RAD2DEG( atan2( vr_scope_f[1], vr_scope_f[0] ));
 	out->viewangles[ROLL] = RAD2DEG( atan2( vr_scope_l[2], vr_scope_u[2] ));
 
-	out->fov_x = out->fov_y = fov;
-	out->viewport[0] = 0;
-	out->viewport[1] = 0;
-	out->viewport[2] = size;
-	out->viewport[3] = size;
-	memcpy( vr_scope_vp, out->viewport, sizeof( vr_scope_vp ));
+	// vr_scope_fov is the height of the picture, the engine wants the width
+	out->fov_y = fov;
+	out->fov_x = RAD2DEG( 2.0f * atan( tan( DEG2RAD( fov ) * 0.5f ) * aspect ));
 
 	vr_scope_in_pass = true;
 	return true;
@@ -2608,22 +2705,14 @@ qboolean VR_SetupScopeView( const ref_viewpass_t *game, ref_viewpass_t *out )
 // called after the scope's view was drawn: keep the picture
 void VR_EndScopePass( void )
 {
-	int sw, sh, gw = gpGlobals->width, gh = gpGlobals->height;
-	int x, x2, y, y2, w, h;
+	int w, h;
 
 	vr_scope_in_pass = false;
 
-	// the same rectangle the renderer used for the scope's viewport (R_SetupGL). Reading GL_VIEWPORT back
-	// does not work: the renderer resets it after the scene
-	GL_GetSceneTargetSize( &sw, &sh );
-	x = vr_scope_vp[0] * sw / gw;
-	x2 = (( vr_scope_vp[0] + vr_scope_vp[2] ) * sw + gw - 1 ) / gw;
-	y = sh - vr_scope_vp[1] * sh / gh;
-	y2 = sh - (( vr_scope_vp[1] + vr_scope_vp[3] ) * sh + gh - 1 ) / gh;
-	w = x2 - x;
-	h = y - y2;
+	// the scene target (or the window) is still bound from R_SetupGL, the same way the eyes copy it
+	GL_GetSceneTargetSize( &w, &h );
 
-	if( w < 16 || h < 16 || tr.rotation & 1 )
+	if( w < 16 || h < 16 )
 		return;
 
 	if( !vr_scope_tex || vr_scope_tex_w != w || vr_scope_tex_h != h )
@@ -2643,9 +2732,9 @@ void VR_EndScopePass( void )
 	}
 	else pglBindTexture( GL_TEXTURE_2D, vr_scope_tex );
 
-	GL_BindSceneTarget();
-	pglCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, x, y2, w, h );
+	pglCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h );
 	VR_ForgetTextureBinding();
+	vr_scope_half_w = 0.5f * (float)h / (float)w;
 	vr_scope_ready = true;
 }
 
@@ -2721,7 +2810,7 @@ static void VR_DrawScopeLens( void )
 		// left of the weapon is the left of the picture
 		VectorMA( vr_scope_pos, ca * r, vr_scope_l, a );
 		VectorMA( a, sa * r, vr_scope_u, b );
-		pglTexCoord2f( 0.5f - ca * 0.49f, 0.5f + sa * 0.49f );
+		pglTexCoord2f( 0.5f - ca * vr_scope_half_w * 0.98f, 0.5f + sa * 0.49f );
 		pglVertex3fv( b );
 	}
 

@@ -2166,16 +2166,6 @@ static void R_StudioDrawPoints( void )
 			}
 		}
 
-		// weapon models that are huge or far from the hand get fitted automatically
-		if( RI.currententity == tr.viewent && VR_AutoFitWanted( ))
-		{
-			for( int i = 0; i < numverts; i++ )
-			{
-				if( pvertbone[i] < nb && !bonehide[pvertbone[i]] && Q_strnicmp( vrbones[pvertbone[i]].name, "r_", 2 ) && Q_strnicmp( vrbones[pvertbone[i]].name, "l_", 2 ))
-					VR_AutoFitAccum( g_studio.verts[i] );
-			}
-		}
-
 		// the manual reload system wants to know where the magazine and the slide really are
 		if( RI.currententity == tr.viewent )
 		{

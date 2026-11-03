@@ -23,6 +23,8 @@ key presses and the mouse cursor for menus.
 
 // published by the renderer each frame, not meant to be set by hand
 static CVAR_DEFINE_AUTO( vr_in_active, "0", 0, "(internal) VR controllers are active" );
+static CVAR_DEFINE_AUTO( vr_in_room_x, "0", 0, "(internal) how far you stepped away from your character, game axes" );
+static CVAR_DEFINE_AUTO( vr_in_room_y, "0", 0, "(internal) how far you stepped away from your character, game axes" );
 static CVAR_DEFINE_AUTO( vr_in_move_fwd, "0", 0, "(internal) left stick forward, -1..1" );
 static CVAR_DEFINE_AUTO( vr_in_move_side, "0", 0, "(internal) left stick sideways, -1..1" );
 static CVAR_DEFINE_AUTO( vr_in_turn, "0", 0, "(internal) right stick sideways, -1..1" );
@@ -190,6 +192,8 @@ void IN_VRInit( void )
 	int i;
 
 	Cvar_RegisterVariable( &vr_in_active );
+	Cvar_RegisterVariable( &vr_in_room_x );
+	Cvar_RegisterVariable( &vr_in_room_y );
 	Cvar_RegisterVariable( &vr_in_move_fwd );
 	Cvar_RegisterVariable( &vr_in_move_side );
 	Cvar_RegisterVariable( &vr_in_turn );
@@ -720,6 +724,34 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		if( fwd < -0.3f ) SetBits( cmd->buttons, IN_BACK );
 		if( side > 0.3f ) SetBits( cmd->buttons, IN_MOVERIGHT );
 		if( side < -0.3f ) SetBits( cmd->buttons, IN_MOVELEFT );
+	}
+
+	// roomscale: walk to where you really stand. the renderer measures how far that is, this turns it into walking
+	{
+		float ox = vr_in_room_x.value, oy = vr_in_room_y.value;
+
+		if(( ox != 0.0f || oy != 0.0f ) && !on_ladder && Cvar_VariableValue( "vr_in_menu" ) < 0.5f )
+		{
+			vec3_t ang = { 0.0f, mode > 0 ? cl.viewangles[YAW] + aim_rel : cmd->viewangles[YAW], 0.0f }, f, r;
+			float vf, vs, len;
+
+			AngleVectors( ang, f, r, NULL );
+			vf = ( ox * f[0] + oy * f[1] ) * 6.0f;
+			vs = ( ox * r[0] + oy * r[1] ) * 6.0f;
+			len = sqrt( vf * vf + vs * vs );
+
+			if( len > 250.0f )
+			{
+				vf *= 250.0f / len;
+				vs *= 250.0f / len;
+			}
+
+			cmd->forwardmove += vf;
+			cmd->sidemove += vs;
+		}
+
+		Cvar_SetValue( "vr_in_room_x", 0.0f );
+		Cvar_SetValue( "vr_in_room_y", 0.0f );
 	}
 
 	// what the game aims, uses and shoots along. cl.viewangles stays the body direction, so the

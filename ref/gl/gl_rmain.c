@@ -1218,12 +1218,17 @@ void R_RenderFrame( const ref_viewpass_t *rvp )
 			}
 		}
 
-		// vr_eye_prepass: the left eye is drawn twice, the first picture is thrown away
-		int passes = VR_EyePrepass() ? 3 : 2, pass;
+		// vr_eye_prepass: an eye is drawn twice and the first picture is thrown away (1 = left eye, 2 = both)
+		int order[4], passes = 0, pass, prepass = VR_EyePrepass();
+
+		if( prepass ) order[passes++] = 0;
+		order[passes++] = 0;
+		if( prepass > 1 ) order[passes++] = 1;
+		order[passes++] = 1;
 
 		for( pass = 0; pass < passes; pass++ )
 		{
-			eye = ( passes == 3 && pass > 0 ) ? pass - 1 : pass;
+			eye = order[pass];
 			VR_SetupEyeView( eye, rvp, &eyepass );
 			R_SetupRefParams( &eyepass );
 			R_RenderScene();
