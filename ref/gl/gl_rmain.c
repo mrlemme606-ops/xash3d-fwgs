@@ -908,6 +908,9 @@ static void R_DrawEntitiesOnList( void )
 		if( r_vr_skydome && R_IsSkyModel( RI.currententity ))
 			continue;
 
+		if( VR_EntityHidden( RI.currententity ))
+			continue;
+
 		Assert( RI.currententity != NULL );
 		Assert( RI.currentmodel != NULL );
 
@@ -982,6 +985,9 @@ static void R_DrawEntitiesOnList( void )
 		RI.currentmodel = RI.currententity->model;
 
 		if( r_vr_skydome && R_IsSkyModel( RI.currententity ))
+			continue;
+
+		if( VR_EntityHidden( RI.currententity ))
 			continue;
 
 		// handle studiomodels with custom rendermodes on texture

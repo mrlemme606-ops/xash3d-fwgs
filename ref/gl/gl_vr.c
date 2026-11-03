@@ -140,6 +140,9 @@ static CVAR_DEFINE_AUTO( vr_mirror_models, "flare", 0, "weapon model names (sepa
 static CVAR_DEFINE_AUTO( vr_eye_prepass, "0", FCVAR_ARCHIVE, "draw an eye twice and keep the second picture (for objects that are black in one eye, or a sky that lags, when the game's opengl32.dll is used): 1 = left eye twice, 2 = both eyes twice" );
 static CVAR_DEFINE_AUTO( vr_roomscale, "1", FCVAR_ARCHIVE, "1 = your character walks to where you really stand in your room" );
 static CVAR_DEFINE_AUTO( vr_room_deadzone, "4", FCVAR_ARCHIVE, "how far (game units, about 2.5 cm each) you have to step before your character follows" );
+static CVAR_DEFINE_AUTO( vr_hide_models, "", 0, "weapon / prop model names (parts, separated by +) that are not drawn at all. Find the name with vr_ents. For things that should not be visible, like the big flat terrain" );
+static CVAR_DEFINE_AUTO( vr_hide_renderfx, "", 0, "render fx numbers (separated by +) whose entities are not drawn, e.g. 92+184. See vr_ents" );
+static CVAR_DEFINE_AUTO( vr_scope_line, "1", FCVAR_ARCHIVE, "thickness of the scope crosshair in pixels" );
 static CVAR_DEFINE_AUTO( vr_light_debug, "1", 0, "1 = print the animation name of a phone / flashlight / flare whenever it changes (to tune vr_light_on_seq / vr_light_off_seq)" );
 static CVAR_DEFINE_AUTO( vr_light_on_seq, "flash+_on+burn+ignite+light_on+idle_lit", 0, "animation name fragments (separated by +) that mean the light is ON" );
 static CVAR_DEFINE_AUTO( vr_light_off_seq, "sms+_off+unlit+extinguish+light_off+flare_idle+throw", 0, "animation name fragments (separated by +) that mean the light is OFF" );
@@ -293,6 +296,7 @@ static void VR_UpdateWeaponProfile( void );
 static void VR_WeaponReset_f( void );
 static void VR_VMInfo_f( void );
 static void VR_GLInfo_f( void );
+static void VR_Ents_f( void );
 static void VR_WeaponSave_f( void );
 static void VR_Center_f( void );
 static void VR_HideCrosshair( void );
@@ -429,6 +433,9 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_sky_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_roomscale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_room_deadzone );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hide_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hide_renderfx );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_line );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_on_seq );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_off_seq );
@@ -469,6 +476,7 @@ void VR_InitCvars( void )
 	VR_UIInitCvars();
 	gEngfuncs.Cmd_AddCommand( "vr_vm_center", VR_Center_f, "put the middle of the weapon in your hand. vr_vm_center <size> also sizes it (size = length in units)" );
 	gEngfuncs.Cmd_AddCommand( "vr_vm_info", VR_VMInfo_f, "print what the game says about the weapon model in hand (scale, size, auto-fit) - for weapons that look wrong" );
+	gEngfuncs.Cmd_AddCommand( "vr_ents", VR_Ents_f, "list the things drawn in this scene (model, render fx, distance, size). \"vr_ents all\" lists everything" );
 	gEngfuncs.Cmd_AddCommand( "vr_gl_info", VR_GLInfo_f, "print which OpenGL driver / opengl32.dll the game is using" );
 	gEngfuncs.Cmd_AddCommand( "vr_weapon_reset", VR_WeaponReset_f, "put the weapon in hand back to the default position/size and overwrite its saved file" );
 	gEngfuncs.Cmd_AddCommand( "vr_weapon_save", VR_WeaponSave_f, "save the current weapon position/size settings for the weapon you are holding" );
@@ -1657,6 +1665,80 @@ static void VR_VMInfo_f( void )
 		R_StudioModelRadius( v->model ), VR_GetViewModelScale(), VR_ViewModelMirror() ? "yes" : "no" );
 }
 
+// entities that are not drawn: by model name (vr_hide_models) or render fx number (vr_hide_renderfx)
+qboolean VR_EntityHidden( const cl_entity_t *e )
+{
+	const char *p;
+
+	if( !e || ( !vr_hide_models.string[0] && !vr_hide_renderfx.string[0] ))
+		return false;
+
+	if( e->model && vr_hide_models.string[0] && VR_ListMatches( vr_hide_models.string, e->model->name, true ))
+		return true;
+
+	p = vr_hide_renderfx.string;
+
+	while( *p )
+	{
+		while( *p == '+' || *p == ' ' || *p == ',' ) p++;
+
+		if( *p >= '0' && *p <= '9' )
+		{
+			int v = atoi( p );
+
+			while( *p >= '0' && *p <= '9' ) p++;
+
+			if( e->curstate.renderfx == v && e != tr.viewent )
+				return true;
+		}
+		else if( *p ) p++;
+	}
+
+	return false;
+}
+
+static void VR_Ents_f( void )
+{
+	int n, i, shown = 0;
+	qboolean all = gEngfuncs.Cmd_Argc() > 1 && !Q_stricmp( gEngfuncs.Cmd_Argv( 1 ), "all" );
+
+	if( !tr.draw_list )
+	{
+		gEngfuncs.Con_Printf( "VR: nothing drawn yet\n" );
+		return;
+	}
+
+	n = tr.draw_list->num_solid_entities + tr.draw_list->num_trans_entities;
+	gEngfuncs.Con_Printf( "%d entities drawn (showing %s). model, render fx, render mode, distance, size\n", n, all ? "all" : "custom render fx or very big ones" );
+
+	for( i = 0; i < n; i++ )
+	{
+		cl_entity_t *e = i < tr.draw_list->num_solid_entities ? tr.draw_list->solid_entities[i] : tr.draw_list->trans_entities[i - tr.draw_list->num_solid_entities];
+		vec3_t d;
+		float rad = 0.0f;
+		int k;
+
+		if( !e || !e->model )
+			continue;
+
+		for( k = 0; k < 3; k++ )
+			rad = Q_max( rad, Q_max( fabs( e->model->mins[k] ), fabs( e->model->maxs[k] )));
+
+		if( e->model->type == mod_studio )
+			rad = Q_max( rad, R_StudioModelRadius( e->model ));
+
+		if( !all && e->curstate.renderfx <= 21 && rad < 1500.0f )
+			continue;
+
+		VectorSubtract( e->origin, RI.rvp.vieworigin, d );
+		gEngfuncs.Con_Printf( "  %s: ent %d, renderfx %d, rendermode %d, %.0f away, size %.0f\n", e->model->name, e->index,
+			e->curstate.renderfx, e->curstate.rendermode, VectorLength( d ), rad );
+
+		if( ++shown >= 120 )
+			break;
+	}
+}
+
 static void VR_GLInfo_f( void )
 {
 	gEngfuncs.Con_Printf( "GL_VENDOR: %s\nGL_RENDERER: %s\nGL_VERSION: %s\n", glConfig.vendor_string, glConfig.renderer_string, glConfig.version_string );
@@ -2820,7 +2902,7 @@ static void VR_DrawScopeLens( void )
 	// crosshair
 	VectorMA( vr_scope_pos, -0.03f, vr_scope_f, c );
 	pglColor4f( 0.0f, 0.0f, 0.0f, 1.0f );
-	pglLineWidth( 2.5f );
+	pglLineWidth( bound( 0.5f, vr_scope_line.value, 6.0f ));
 	pglBegin( GL_LINES );
 	VectorMA( c, r * 0.95f, vr_scope_l, a ); pglVertex3fv( a );
 	VectorMA( c, -r * 0.95f, vr_scope_l, a ); pglVertex3fv( a );

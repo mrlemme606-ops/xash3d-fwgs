@@ -95,6 +95,7 @@ void VR_LightObserve( const char *label, float animtime );
 qboolean VR_GetViewModelAxes( vec3_t f, vec3_t l, vec3_t u );
 qboolean VR_ViewModelMirror( void );
 int VR_EyePrepass( void );
+qboolean VR_EntityHidden( const cl_entity_t *e );
 float R_StudioModelRadius( model_t *mod );
 qboolean VR_ScopePass( void );
 qboolean VR_SetupScopeView( const ref_viewpass_t *game, ref_viewpass_t *out );

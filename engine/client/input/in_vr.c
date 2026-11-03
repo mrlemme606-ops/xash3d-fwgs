@@ -23,6 +23,13 @@ key presses and the mouse cursor for menus.
 
 // published by the renderer each frame, not meant to be set by hand
 static CVAR_DEFINE_AUTO( vr_in_active, "0", 0, "(internal) VR controllers are active" );
+static CVAR_DEFINE_AUTO( vr_keyboard_auto, "1", FCVAR_ARCHIVE, "1 = the SteamVR keyboard opens by itself when a screen with a mouse cursor opens in one of the maps in vr_keyboard_maps (the computer)" );
+static CVAR_DEFINE_AUTO( vr_keyboard_maps, "cafe", FCVAR_ARCHIVE, "map names (parts, separated by +) where vr_keyboard_auto works. Empty = every map" );
+static CVAR_DEFINE_AUTO( vr_in_kbd, "0", 0, "(internal) the keyboard should be open" );
+static CVAR_DEFINE_AUTO( vr_in_kbd_chars, "", 0, "(internal) typed characters waiting to be sent to the game" );
+static CVAR_DEFINE_AUTO( vr_in_kbd_closed, "0", 0, "(internal) the player closed the keyboard" );
+static CVAR_DEFINE_AUTO( vr_in_room_quiet, "0", 0, "(internal) the player only moves because he walks around his room" );
+static CVAR_DEFINE_AUTO( vr_quiet_steps, "step+pl_dirt+pl_duct+pl_grate+pl_metal+pl_tile+pl_slosh+pl_wade+pl_snow+pl_grass+pl_gravel+pl_wood+pl_concrete", FCVAR_ARCHIVE, "sound names (parts, separated by +) that are not played while you only move by walking around your room" );
 static CVAR_DEFINE_AUTO( vr_in_room_x, "0", 0, "(internal) how far you stepped away from your character, game axes" );
 static CVAR_DEFINE_AUTO( vr_in_room_y, "0", 0, "(internal) how far you stepped away from your character, game axes" );
 static CVAR_DEFINE_AUTO( vr_in_move_fwd, "0", 0, "(internal) left stick forward, -1..1" );
@@ -187,11 +194,77 @@ qboolean IN_VRGetRay( vec3_t origin, vec3_t dir )
 	return true;
 }
 
+// ---- SteamVR keyboard: the characters typed on it become key presses for the game
+static qboolean kbd_manual, kbd_dismissed;
+static float room_until;
+
+static void IN_VRKeyboard_f( void )
+{
+	kbd_manual = !kbd_manual;
+	kbd_dismissed = false;
+}
+
+static qboolean IN_VRKeyboardMap( void )
+{
+	const char *p = vr_keyboard_maps.string;
+
+	if( !*p )
+		return true;
+
+	while( *p )
+	{
+		char tok[48];
+		int n = 0;
+
+		while( *p == '+' || *p == ' ' ) p++;
+		while( *p && *p != '+' && n < 47 ) tok[n++] = *p++;
+		tok[n] = 0;
+
+		if( n && Q_stristr( clgame.mapname, tok ))
+			return true;
+	}
+
+	return false;
+}
+
+static void IN_VRTypeChar( int ch )
+{
+	static const char shifted[] = "!@#$%^&*()_+:\"<>?{}|~";
+	static const char plain[] = "1234567890-=;',./[]\\`";
+	const char *sp;
+	int key = ch;
+	qboolean shift = false;
+
+	if( ch == '\b' ) key = K_BACKSPACE;
+	else if( ch == '\r' || ch == '\n' ) key = K_ENTER;
+	else if( ch >= 'A' && ch <= 'Z' ) { key = ch + 32; shift = true; }
+	else if( ch > 32 && ( sp = Q_strchr( shifted, ch )) != NULL ) { key = plain[sp - shifted]; shift = true; }
+
+	if( cls.key_dest != key_game && ch >= 32 )
+	{
+		CL_CharEvent( ch );	// the console and the menu take text directly
+		return;
+	}
+
+	if( shift ) Key_Event( K_SHIFT, true );
+	Key_Event( key, true );
+	Key_Event( key, false );
+	if( shift ) Key_Event( K_SHIFT, false );
+}
+
 void IN_VRInit( void )
 {
 	int i;
 
 	Cvar_RegisterVariable( &vr_in_active );
+	Cvar_RegisterVariable( &vr_keyboard_auto );
+	Cvar_RegisterVariable( &vr_keyboard_maps );
+	Cvar_RegisterVariable( &vr_in_kbd );
+	Cvar_RegisterVariable( &vr_in_kbd_chars );
+	Cvar_RegisterVariable( &vr_in_kbd_closed );
+	Cvar_RegisterVariable( &vr_in_room_quiet );
+	Cvar_RegisterVariable( &vr_quiet_steps );
+	Cmd_AddCommand( "vr_keyboard", IN_VRKeyboard_f, "open or close the SteamVR keyboard for the text box you are typing in" );
 	Cvar_RegisterVariable( &vr_in_room_x );
 	Cvar_RegisterVariable( &vr_in_room_y );
 	Cvar_RegisterVariable( &vr_in_move_fwd );
@@ -382,6 +455,42 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 
 		if( vr_in_menu.value != menu )
 			Cvar_DirectSetValue( &vr_in_menu, menu );
+	}
+
+	{
+		// the SteamVR keyboard for text boxes in the game (the computer): open while such a screen is open
+		qboolean ui_open = cls.state == ca_active && cls.key_dest == key_game && host.mouse_visible;
+		qboolean want;
+
+		if( !ui_open && cls.key_dest == key_game )
+			kbd_manual = false;
+
+		if( vr_in_kbd_closed.value )
+		{
+			kbd_dismissed = true;
+			kbd_manual = false;
+			Cvar_DirectSetValue( &vr_in_kbd_closed, 0.0f );
+		}
+
+		if( !ui_open && !kbd_manual )
+			kbd_dismissed = false;
+
+		want = !kbd_dismissed && ( kbd_manual || ( ui_open && vr_keyboard_auto.value && IN_VRKeyboardMap( )));
+
+		if(( vr_in_kbd.value >= 0.5f ) != want )
+			Cvar_DirectSetValue( &vr_in_kbd, want ? 1.0f : 0.0f );
+
+		if( vr_in_kbd_chars.string[0] )
+		{
+			const char *c = vr_in_kbd_chars.string;
+			char copy[256];
+
+			Q_strncpy( copy, c, sizeof( copy ));
+			Cvar_DirectSet( &vr_in_kbd_chars, "" );
+
+			for( c = copy; *c; c++ )
+				IN_VRTypeChar(( unsigned char )*c );
+		}
 	}
 
 	if( vr_in_active.value <= 0.0f )
@@ -748,10 +857,19 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 
 			cmd->forwardmove += vf;
 			cmd->sidemove += vs;
+			room_until = host.realtime + 0.6f;
 		}
 
 		Cvar_SetValue( "vr_in_room_x", 0.0f );
 		Cvar_SetValue( "vr_in_room_y", 0.0f );
+
+		// footsteps from walking around your room are muted (s_main.c): a step of a millimeter is not a walk
+		{
+			float quiet = ( host.realtime < room_until && fabs( vr_in_move_fwd.value ) < 0.25f && fabs( vr_in_move_side.value ) < 0.25f ) ? 1.0f : 0.0f;
+
+			if( vr_in_room_quiet.value != quiet )
+				Cvar_DirectSetValue( &vr_in_room_quiet, quiet );
+		}
 	}
 
 	// what the game aims, uses and shoots along. cl.viewangles stays the body direction, so the
