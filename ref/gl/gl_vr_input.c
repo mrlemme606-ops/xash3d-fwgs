@@ -125,6 +125,20 @@ void VR_InputPoll( float head_yaw_relative, float head_pitch, qboolean physical_
 		VR_Stick( left.rAxis[0].x, left.rAxis[0].y, &mx, &my );
 	}
 
+	// both stick clicks together: recenter (and neither of them counts as sprint / reload then)
+	{
+		static qboolean was_both;
+		qboolean both = ( buttons & ( 1 << VRB_LSTICK )) && ( buttons & ( 1 << VRB_RSTICK ));
+
+		if( both && !was_both )
+			gEngfuncs.Cbuf_AddText( "vr_recenter\n" );
+
+		if( both )
+			buttons &= ~(( 1 << VRB_LSTICK ) | ( 1 << VRB_RSTICK ));
+
+		was_both = both;
+	}
+
 	// raw sticks. the engine decides how to rotate them (see vr_aim_gaze in in_vr.c)
 	gEngfuncs.Cvar_SetValue( "vr_in_move_fwd", my );
 	gEngfuncs.Cvar_SetValue( "vr_in_move_side", mx );

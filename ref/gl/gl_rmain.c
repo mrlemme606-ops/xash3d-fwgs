@@ -1218,8 +1218,12 @@ void R_RenderFrame( const ref_viewpass_t *rvp )
 			}
 		}
 
-		for( eye = 0; eye < 2; eye++ )
+		// vr_eye_prepass: the left eye is drawn twice, the first picture is thrown away
+		int passes = VR_EyePrepass() ? 3 : 2, pass;
+
+		for( pass = 0; pass < passes; pass++ )
 		{
+			eye = ( passes == 3 && pass > 0 ) ? pass - 1 : pass;
 			VR_SetupEyeView( eye, rvp, &eyepass );
 			R_SetupRefParams( &eyepass );
 			R_RenderScene();

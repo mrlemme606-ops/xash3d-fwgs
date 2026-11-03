@@ -143,6 +143,7 @@ static studiohdr_t *m_pStudioHeader;
 static float m_flGaitMovement;
 static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
+static qboolean r_vr_mirror;		// the weapon is drawn mirrored (a left-handed weapon held in the right hand)
 static qboolean r_vr_viewmodel;	// the weapon is being drawn at the VR hand
 static cl_entity_t vr_lhand_ent;	// the universal left hand
 float r_sky_scale;		// > 0 while a sky model is drawn: shrinks it to fit the far clip plane
@@ -563,6 +564,25 @@ static void R_StudioSetUpTransform( cl_entity_t *e )
 			scale = r_sky_scale;
 
 		Matrix3x4_CreateFromEntity( g_studio.rotationmatrix, angles, origin, scale );
+
+		// the weapon in the VR hand is drawn straight from its axes, Euler angles spin it when it points up or down
+		if( r_vr_viewmodel && e == tr.viewent )
+		{
+			vec3_t f, l, u;
+
+			if( VR_GetViewModelAxes( f, l, u ))
+			{
+				for( int r = 0; r < 3; r++ )
+				{
+					g_studio.rotationmatrix[r][0] = f[r] * scale;
+					g_studio.rotationmatrix[r][1] = l[r] * scale;
+					g_studio.rotationmatrix[r][2] = u[r] * scale;
+				}
+			}
+
+			// mirrored (a left-handed weapon in the right hand), or not
+			tr.fFlipViewModel = r_vr_mirror;
+		}
 	}
 
 	if( tr.fFlipViewModel )
@@ -2146,6 +2166,16 @@ static void R_StudioDrawPoints( void )
 			}
 		}
 
+		// weapon models that are huge or far from the hand get fitted automatically
+		if( RI.currententity == tr.viewent && VR_AutoFitWanted( ))
+		{
+			for( int i = 0; i < numverts; i++ )
+			{
+				if( pvertbone[i] < nb && !bonehide[pvertbone[i]] && Q_strnicmp( vrbones[pvertbone[i]].name, "r_", 2 ) && Q_strnicmp( vrbones[pvertbone[i]].name, "l_", 2 ))
+					VR_AutoFitAccum( g_studio.verts[i] );
+			}
+		}
+
 		// the manual reload system wants to know where the magazine and the slide really are
 		if( RI.currententity == tr.viewent )
 		{
@@ -2238,7 +2268,7 @@ static void R_StudioDrawPoints( void )
 	// see https://github.com/FWGS/xash3d-fwgs/issues/2517
 	if( glState.faceCull != GL_NONE )
 	{
-		if( R_AllowFlipViewModel( RI.currententity ))
+		if( R_AllowFlipViewModel( RI.currententity ) || ( r_vr_mirror && RI.currententity == tr.viewent ))
 		{
 			tr.fFlipViewModel = true;
 			GL_Cull( GL_NONE );
@@ -3760,13 +3790,14 @@ void R_DrawViewModel( void )
 				mstudioseqdesc_t *osd = (mstudioseqdesc_t *)((byte *)ohdr + ohdr->seqindex) + view->curstate.sequence;
 
 				VR_ReloadObserve( osd->label, view->curstate.animtime );
-				VR_LightObserve( osd->label );
+				VR_LightObserve( osd->label, view->curstate.animtime );
 			}
 		}
 	}
 
 	// adjust the depth range to prevent view model from poking into walls
 	r_vr_viewmodel = vr_hand;
+	r_vr_mirror = vr_hand && VR_ViewModelMirror();
 
 	// melee weapons and pistol whips: hold one pose, your own arm does the swinging.
 	// vr_vm_lock_seq / vr_vm_lock_frame hold any pose for testing
@@ -3841,6 +3872,7 @@ void R_DrawViewModel( void )
 	}
 
 	r_vr_viewmodel = false;
+	r_vr_mirror = false;
 
 	// restore depth range
 	pglDepthRange( gldepthmin, gldepthmax );
