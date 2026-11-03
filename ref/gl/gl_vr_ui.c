@@ -465,6 +465,73 @@ static void VR_UIUpdatePointer( const HmdMatrix34_t *panel )
 	}
 }
 
+/*
+=================
+SteamVR keyboard. The engine (in_vr.c) says when a text box is open (vr_in_kbd). The characters typed
+on the keyboard come back as overlay events and are handed to the engine in vr_in_kbd_chars, which
+turns them into key presses for the game.
+=================
+*/
+static void VR_UIKeyboard( void )
+{
+	static cvar_t *want_cv, *chars_cv;
+	static qboolean kbd_open, kbd_blocked;
+	struct VREvent_t ev;
+	qboolean want;
+
+	if( !ui.overlay )
+		return;
+
+	if( !want_cv ) want_cv = gEngfuncs.pfnGetCvarPointer( "vr_in_kbd" );
+	if( !chars_cv ) chars_cv = gEngfuncs.pfnGetCvarPointer( "vr_in_kbd_chars" );
+
+	want = want_cv && want_cv->value >= 0.5f;
+
+	if( !want )
+		kbd_blocked = false;
+
+	if( want && !kbd_open && !kbd_blocked )
+	{
+		if( ui.overlay->ShowKeyboardForOverlay( ui.handle, EGamepadTextInputMode_k_EGamepadTextInputModeNormal,
+			EGamepadTextInputLineMode_k_EGamepadTextInputLineModeSingleLine, (char *)"Type here", 64, (char *)"", true, 0 ) == EVROverlayError_VROverlayError_None )
+			kbd_open = true;
+		else kbd_blocked = true;	// could not open it, do not try every frame
+	}
+	else if( !want && kbd_open )
+	{
+		ui.overlay->HideKeyboard();
+		kbd_open = false;
+	}
+
+	while( ui.overlay->PollNextOverlayEvent( ui.handle, &ev, sizeof( ev )))
+	{
+		char buf[8], all[256];
+
+		if( ev.eventType == EVREventType_VREvent_KeyboardCharInput )
+		{
+			// the header declares the typed text as an array of pointers, it really is 8 plain characters
+			memcpy( buf, &ev.data.keyboard, 7 );
+			buf[7] = 0;
+		}
+		else if( ev.eventType == EVREventType_VREvent_KeyboardDone )
+		{
+			buf[0] = '\r';
+			buf[1] = 0;
+		}
+		else if( ev.eventType == EVREventType_VREvent_KeyboardClosed )
+		{
+			kbd_open = false;
+			kbd_blocked = true;
+			gEngfuncs.Cvar_SetValue( "vr_in_kbd_closed", 1.0f );
+			continue;
+		}
+		else continue;
+
+		Q_snprintf( all, sizeof( all ), "%s%s", chars_cv ? chars_cv->string : "", buf );
+		gEngfuncs.Cvar_Set( "vr_in_kbd_chars", all );
+	}
+}
+
 // called at the very start of R_EndFrame, before the frame is presented
 void VR_UIUpdate( void )
 {
@@ -482,6 +549,8 @@ void VR_UIUpdate( void )
 		ui.failed = true;
 		return;
 	}
+
+	VR_UIKeyboard();
 
 	// copy the transparent-background 2D layer
 	VR_UIEnsureTexture( w, h );

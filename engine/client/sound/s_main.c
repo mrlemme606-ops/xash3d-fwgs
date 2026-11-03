@@ -620,10 +620,38 @@ SV_StartSound.
 ====================
 */
 // the VR reload system hides the game's own reload sounds while you reload by hand
+static qboolean S_VRNameInList( const char *list, const char *name )
+{
+	const char *p = list;
+
+	while( *p )
+	{
+		char tok[48];
+		int n = 0;
+
+		while( *p == '+' || *p == ' ' ) p++;
+		while( *p && *p != '+' && n < 47 ) tok[n++] = *p++;
+		tok[n] = 0;
+
+		if( n && Q_stristr( name, tok ))
+			return true;
+	}
+
+	return false;
+}
+
 static qboolean S_VRMuted( int ent, int chan, const sfx_t *sfx )
 {
-	static convar_t *on, *list, *own;
+	static convar_t *on, *list, *own, *quiet, *steps;
 	const char *p;
+
+	// footsteps of someone who only walks around his room (the game would play a whole walk for a millimeter)
+	if( !quiet ) quiet = Cvar_FindVar( "vr_in_room_quiet" );
+	if( !steps ) steps = Cvar_FindVar( "vr_quiet_steps" );
+
+	if( quiet && steps && quiet->value >= 0.5f && ( ent == cl.playernum + 1 || ent == cl.viewentity )
+		&& S_VRNameInList( steps->string, sfx->name ))
+		return true;
 
 	if( !on ) on = Cvar_FindVar( "vr_rl_mute_on" );
 	if( !list ) list = Cvar_FindVar( "vr_rl_mute" );
