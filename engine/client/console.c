@@ -31,7 +31,7 @@ static CVAR_DEFINE_AUTO( con_charset, "cp1251", FCVAR_ARCHIVE, "console font cha
 static CVAR_DEFINE_AUTO( con_fontscale, "1.0", FCVAR_ARCHIVE, "scale font texture" );
 static CVAR_DEFINE_AUTO( con_fontnum, "-1", FCVAR_ARCHIVE, "console font number (0, 1 or 2), -1 for autoselect" );
 static CVAR_DEFINE_AUTO( con_color, "240 180 24", FCVAR_ARCHIVE, "set a custom console color" );
-static CVAR_DEFINE_AUTO( scr_drawversion, "1", FCVAR_ARCHIVE, "draw version in menu or screenshots, doesn't affect console" );
+static CVAR_DEFINE_AUTO( scr_drawversion, "0", FCVAR_ARCHIVE, "draw version in menu or screenshots, doesn't affect console" );
 static CVAR_DEFINE_AUTO( con_oldfont, "0", 0, "use legacy font from gfx.wad, might be missing or broken" );
 static CVAR_DEFINE_AUTO( con_showcompletion, "1", FCVAR_ARCHIVE, "perform simplified autocompletion while typing" );
 
@@ -1810,6 +1810,10 @@ Draws the last few lines of output transparently over the game top
 */
 static void Con_DrawNotify( void )
 {
+	// in VR the console messages in the corner are not wanted (they float in front of the picture)
+	if( Cvar_VariableValue( "vr_in_active" ) > 0.0f && !Con_Visible( ))
+		return;
+
 	double	time = cl.time;
 	int	y = 0;
 

@@ -34,7 +34,7 @@ static CVAR_DEFINE_AUTO( vr_ui_distance, "1.5", 0, "distance of the UI panel in 
 static CVAR_DEFINE_AUTO( vr_ui_size, "1.3", 0, "height of the UI panel in meters. The width follows the window's aspect ratio, so the menus are the same physical size at every resolution" );
 static CVAR_DEFINE_AUTO( vr_ui_width, "0", 0, "force the UI panel width in meters (0 = automatic from vr_ui_size)" );
 static CVAR_DEFINE_AUTO( vr_ui_maxwidth, "2.6", 0, "widest the UI panel may get, in meters (very wide windows are scaled down to this)" );
-static CVAR_DEFINE_AUTO( vr_hud_hand, "0", FCVAR_ARCHIVE, "1 = two strips of the HUD (health/stamina and ammo, see vr_hud_band, vr_hud_x1, vr_hud_x2) are shown on the back of your right hand instead of the floating panel. Everything else stays on the panel" );
+static CVAR_DEFINE_AUTO( vr_hud_hand, "1", FCVAR_ARCHIVE, "1 = two strips of the HUD (health/stamina and ammo, see vr_hud_band, vr_hud_x1, vr_hud_x2) are shown on the back of your right hand instead of the floating panel. Everything else stays on the panel" );
 static CVAR_DEFINE_AUTO( vr_hud_width, "0.22", FCVAR_ARCHIVE, "width in meters of the HUD on your hand" );
 static CVAR_DEFINE_AUTO( vr_hud_band, "0 0.14", FCVAR_ARCHIVE, "height of the strips taken from the HUD, as: bottom top (0 to 1 of the screen height, from the bottom). Needs quotes" );
 static CVAR_DEFINE_AUTO( vr_hud_x1, "0 0.30", FCVAR_ARCHIVE, "first strip (health, stamina), as: left right (0 to 1 of the screen width). Needs quotes" );

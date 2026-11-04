@@ -125,11 +125,11 @@ static CVAR_DEFINE_AUTO( vr_enable, "0", 0, "enable SteamVR (OpenVR) stereo rend
 static CVAR_DEFINE_AUTO( vr_worldscale, "39.37", 0, "game units per meter (GoldSrc: 1 unit = 1 inch)" );
 static CVAR_DEFINE_AUTO( vr_flip_roll, "0", 0, "set to 1 if head roll is inverted" );
 static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotation only), useful for diagnosing warping" );
-static CVAR_DEFINE_AUTO( vr_flip_vfov, "0", FCVAR_ARCHIVE, "diagnostic: swap the up and down field of view. Try 1 if what is drawn sits a little too low or high compared to the menu pointer" );
+static CVAR_DEFINE_AUTO( vr_flip_vfov, "1", FCVAR_ARCHIVE, "diagnostic: swap the up and down field of view. Try 1 if what is drawn sits a little too low or high compared to the menu pointer" );
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.30", FCVAR_ARCHIVE, "meters below your recentered height that count as physically crouching (you stand up again at 60% of this)" );
 static CVAR_DEFINE_AUTO( vr_crouch_comp, "28", FCVAR_ARCHIVE, "units the view is given back when you crouch (the game lowers it too, so it is not counted twice). 0 = measured automatically (experimental)" );
-static CVAR_DEFINE_AUTO( vr_nofreeze_models, "camera+branch", 0, "weapons that are never held in the idle pose (their own animation is used): part of the file name, + between names" );
+static CVAR_DEFINE_AUTO( vr_nofreeze_models, "", 0, "weapons that are never held in the idle pose (their own animation is used): part of the file name, + between names" );
 static CVAR_DEFINE_AUTO( vr_vm_rot_local, "1", FCVAR_ARCHIVE, "1 = the weapon's pitch/yaw/roll turn in the hand's own axes. 0 = the old way (added to world angles)" );
 static CVAR_DEFINE_AUTO( vr_light_toggle_seq, "switch", 0, "animation name fragments of a flashlight's switch animation: each time it plays, the light flips on/off" );
 static CVAR_DEFINE_AUTO( vr_light_pitch, "0", 0, "tilt the spotlight up (+) or down (-) from where the controller points, degrees (saved per weapon)" );
@@ -137,12 +137,19 @@ static CVAR_DEFINE_AUTO( vr_light_yaw, "0", 0, "turn the spotlight left (+) or r
 static CVAR_DEFINE_AUTO( vr_flare_time, "0", 0, "seconds a flare burns (0 = by difficulty: 120 / 90 / 60 / 30)" );
 static CVAR_DEFINE_AUTO( vr_vm_mirror, "-1", 0, "mirror the weapon in hand left-right: -1 = automatic (vr_mirror_models), 0 = never, 1 = always (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_mirror_models, "flare", 0, "weapon model names (separated by +) that the game holds in the left hand, mirrored to the right" );
-static CVAR_DEFINE_AUTO( vr_eye_prepass, "0", FCVAR_ARCHIVE, "draw an eye twice and keep the second picture (for objects that are black in one eye, or a sky that lags, when the game's opengl32.dll is used): 1 = left eye twice, 2 = both eyes twice" );
+static CVAR_DEFINE_AUTO( vr_eye_prepass, "2", FCVAR_ARCHIVE, "draw an eye twice and keep the second picture (for objects that are black in one eye, or a sky that lags, when the game's opengl32.dll is used): 1 = left eye twice, 2 = both eyes twice" );
 static CVAR_DEFINE_AUTO( vr_roomscale, "1", FCVAR_ARCHIVE, "1 = your character walks to where you really stand in your room" );
 static CVAR_DEFINE_AUTO( vr_room_deadzone, "4", FCVAR_ARCHIVE, "how far (game units, about 2.5 cm each) you have to step before your character follows" );
 static CVAR_DEFINE_AUTO( vr_hide_models, "", 0, "weapon / prop model names (parts, separated by +) that are not drawn at all. Find the name with vr_ents. For things that should not be visible, like the big flat terrain" );
 static CVAR_DEFINE_AUTO( vr_hide_renderfx, "", 0, "render fx numbers (separated by +) whose entities are not drawn, e.g. 92+184. See vr_ents" );
 static CVAR_DEFINE_AUTO( vr_scope_line, "1", FCVAR_ARCHIVE, "thickness of the scope crosshair in pixels" );
+static CVAR_DEFINE_AUTO( vr_anim_still, "idle+fidget", 0, "weapon animations (name parts, separated by +) that never play: the weapon stays in the first frame. Keeps the aim steady" );
+static CVAR_DEFINE_AUTO( vr_anim_end, "draw+equip", 0, "weapon animations (name parts, separated by +) that are skipped: the weapon is shown in the ready pose right away" );
+static CVAR_DEFINE_AUTO( vr_empty_hand, "models/weapons/v_actions.mdl", FCVAR_ARCHIVE, "the model shown as your right hand when you hold nothing. Empty = none" );
+static CVAR_DEFINE_AUTO( vr_room_maxlag, "14", FCVAR_ARCHIVE, "how far (game units) your head can get ahead of your character before the view is pulled back. This is what stops you walking through walls" );
+static CVAR_DEFINE_AUTO( vr_eye_flush, "0", FCVAR_ARCHIVE, "experiment for thin / see-through textures that are missing in VR: 1 = glFlush, 2 = glFinish at the end of each eye" );
+static CVAR_DEFINE_AUTO( vr_aim_pitch, "0", 0, "aim the shots higher (+) or lower (-) than the controller points, degrees (saved per weapon). For items like the camera" );
+static CVAR_DEFINE_AUTO( vr_aim_yaw, "0", 0, "aim the shots to the left (+) or right (-) of where the controller points, degrees (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_light_debug, "1", 0, "1 = print the animation name of a phone / flashlight / flare whenever it changes (to tune vr_light_on_seq / vr_light_off_seq)" );
 static CVAR_DEFINE_AUTO( vr_light_on_seq, "flash+_on+burn+ignite+light_on+idle_lit", 0, "animation name fragments (separated by +) that mean the light is ON" );
 static CVAR_DEFINE_AUTO( vr_light_off_seq, "sms+_off+unlit+extinguish+light_off+flare_idle+throw", 0, "animation name fragments (separated by +) that mean the light is OFF" );
@@ -168,8 +175,8 @@ static CVAR_DEFINE_AUTO( vr_finish, "1", 0, "wait for the GPU after submitting t
 static CVAR_DEFINE_AUTO( vr_ipd_scale, "1.0", 0, "diagnostic: scale the distance between the eyes (0 = mono, 1 = real)" );
 static CVAR_DEFINE_AUTO( vr_testscene, "0", 0, "diagnostic: 1 = a world-fixed wireframe room over the game, 2 = only that room, 3 = a pure SteamVR-only test room that bypasses the game completely" );
 static CVAR_DEFINE_AUTO( vr_hand_pitch, "60", FCVAR_ARCHIVE, "tilt the controller's pointing direction: positive = down, negative = up (degrees). Adjust until the laser points where your hand naturally points" );
-static CVAR_DEFINE_AUTO( vr_draw_axes, "1", FCVAR_ARCHIVE, "draw the small colored axes at each controller (debug visual)" );
-static CVAR_DEFINE_AUTO( vr_draw_laser, "1", FCVAR_ARCHIVE, "draw the laser line and the red aim cross from your right hand (debug visual)" );
+static CVAR_DEFINE_AUTO( vr_draw_axes, "0", FCVAR_ARCHIVE, "draw the small colored axes at each controller (debug visual)" );
+static CVAR_DEFINE_AUTO( vr_draw_laser, "0", FCVAR_ARCHIVE, "draw the laser line and the red aim cross from your right hand (debug visual)" );
 static CVAR_DEFINE_AUTO( vr_draw_hands, "1", FCVAR_ARCHIVE, "draw placeholder controllers and the laser pointer" );
 static CVAR_DEFINE_AUTO( vr_hand_weapon, "1", FCVAR_ARCHIVE, "draw the weapon at your right hand instead of in front of your face" );
 static CVAR_DEFINE_AUTO( vr_vm_grip_x, "13", FCVAR_ARCHIVE, "where the right hand holds the weapon model (model axes): forward" );
@@ -186,23 +193,23 @@ static CVAR_DEFINE_AUTO( vr_vm_hide_bones, "^l_", FCVAR_ARCHIVE, "parts of the w
 static CVAR_DEFINE_AUTO( vr_vm_cap_radius, "0", FCVAR_ARCHIVE, "size of the disc that closes the cut-off arm at the wrist (0 = none)" );
 static CVAR_DEFINE_AUTO( vr_vm_cap_gray, "0.1", FCVAR_ARCHIVE, "brightness of that disc, 0 = black, 1 = white" );
 static CVAR_DEFINE_AUTO( vr_static_models, "mobile+flashlight+flare+lantern+syringe+camera+radio", 0, "weapon model names (part of the file name) whose animations never play, the model stays in one pose in your hand. Separate with +" );
-static CVAR_DEFINE_AUTO( vr_melee_models, "fist+axe+branch+nightstick+sledge+pickaxe+shovel+switchblade", 0, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
+static CVAR_DEFINE_AUTO( vr_melee_models, "fist+actions+axe+branch+nightstick+sledge+pickaxe+shovel+switchblade", 0, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
 static CVAR_DEFINE_AUTO( vr_melee_reach, "64", FCVAR_ARCHIVE, "how far in front of your swinging hand the game looks for something to hit, in units" );
 static CVAR_DEFINE_AUTO( vr_omni_models, "flare+lantern", 0, "weapon model names that light up everything around your hand (flare, lantern). Separate with +" );
 static CVAR_DEFINE_AUTO( vr_omni_radius, "260", FCVAR_ARCHIVE, "size of the light around a flare or lantern, in units" );
 static CVAR_DEFINE_AUTO( vr_lhand, "1", FCVAR_ARCHIVE, "1 = a left hand is drawn at your left controller" );
 static CVAR_DEFINE_AUTO( vr_lhand_model, "models/weapons/switchblade/v_switchblade.mdl", 0, "weapon model whose left arm is used as the left hand" );
 static CVAR_DEFINE_AUTO( vr_lhand_hide_bones, "^r_+grippity+blade", 0, "parts of the left hand model that are not drawn (the right arm and the weapon). Separate with +" );
-static CVAR_DEFINE_AUTO( vr_lh_grip_x, "13", FCVAR_ARCHIVE, "left hand position on the controller: forward" );
-static CVAR_DEFINE_AUTO( vr_lh_grip_y, "4", FCVAR_ARCHIVE, "left hand position on the controller: left (negative = right)" );
+static CVAR_DEFINE_AUTO( vr_lh_grip_x, "12", FCVAR_ARCHIVE, "left hand position on the controller: forward" );
+static CVAR_DEFINE_AUTO( vr_lh_grip_y, "-6", FCVAR_ARCHIVE, "left hand position on the controller: left (negative = right)" );
 static CVAR_DEFINE_AUTO( vr_lh_grip_z, "-3", FCVAR_ARCHIVE, "left hand position on the controller: up" );
 static CVAR_DEFINE_AUTO( vr_lh_pitch, "0", FCVAR_ARCHIVE, "left hand rotation: pitch degrees" );
 static CVAR_DEFINE_AUTO( vr_lh_yaw, "0", FCVAR_ARCHIVE, "left hand rotation: yaw degrees" );
-static CVAR_DEFINE_AUTO( vr_lh_roll, "0", FCVAR_ARCHIVE, "left hand rotation: roll degrees" );
+static CVAR_DEFINE_AUTO( vr_lh_roll, "270", FCVAR_ARCHIVE, "left hand rotation: roll degrees" );
 static CVAR_DEFINE_AUTO( vr_lh_flip_roll, "0", FCVAR_ARCHIVE, "set to 1 if the left hand is rolled the wrong way" );
-static CVAR_DEFINE_AUTO( vr_lh_scale, "0.5", FCVAR_ARCHIVE, "size of the left hand" );
-static CVAR_DEFINE_AUTO( vr_lh_arm_cut, "2", FCVAR_ARCHIVE, "where the left arm is cut off, in units behind the hand" );
-static CVAR_DEFINE_AUTO( vr_lh_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the left arm cut: pitch degrees" );
+static CVAR_DEFINE_AUTO( vr_lh_scale, "0.45", FCVAR_ARCHIVE, "size of the left hand" );
+static CVAR_DEFINE_AUTO( vr_lh_arm_cut, "6", FCVAR_ARCHIVE, "where the left arm is cut off, in units behind the hand" );
+static CVAR_DEFINE_AUTO( vr_lh_cut_pitch, "30", FCVAR_ARCHIVE, "tilt of the left arm cut: pitch degrees" );
 static CVAR_DEFINE_AUTO( vr_lh_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the left arm cut: yaw degrees" );
 static CVAR_DEFINE_AUTO( vr_vm_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the weapon hand's arm cut: pitch degrees (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_vm_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the weapon hand's arm cut: yaw degrees (saved per weapon)" );
@@ -436,6 +443,13 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_hide_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hide_renderfx );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_line );
+	gEngfuncs.Cvar_RegisterVariable( &vr_anim_still );
+	gEngfuncs.Cvar_RegisterVariable( &vr_anim_end );
+	gEngfuncs.Cvar_RegisterVariable( &vr_empty_hand );
+	gEngfuncs.Cvar_RegisterVariable( &vr_room_maxlag );
+	gEngfuncs.Cvar_RegisterVariable( &vr_eye_flush );
+	gEngfuncs.Cvar_RegisterVariable( &vr_aim_pitch );
+	gEngfuncs.Cvar_RegisterVariable( &vr_aim_yaw );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_on_seq );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_off_seq );
@@ -771,6 +785,8 @@ static void VR_HideCrosshair( void )
 	}
 }
 
+static void VR_RotateAxis( vec3_t v, const vec3_t axis, float degrees );
+
 static void VR_PublishAim( const ref_viewpass_t *game )
 {
 	float d = game->viewangles[YAW] - vr.ref_yaw;
@@ -792,9 +808,18 @@ static void VR_PublishAim( const ref_viewpass_t *game )
 	{
 		vec3_t tf, tl, tu;
 
-		if( VR_TwoHandBasis( tf, tl, tu ))
-			VectorCopy( tf, aimdir );
-		else VectorCopy( vr.hand[1].fwd, aimdir );
+		if( !VR_TwoHandBasis( tf, tl, tu ))
+		{
+			VectorCopy( vr.hand[1].fwd, tf );
+			VectorCopy( vr.hand[1].left, tl );
+			VectorCopy( vr.hand[1].up, tu );
+		}
+
+		// vr_aim_pitch / vr_aim_yaw: where the weapon really shoots, when the way you hold it differs from the way it points
+		VR_RotateAxis( tf, tu, vr_aim_yaw.value );
+		VR_RotateAxis( tl, tu, vr_aim_yaw.value );
+		VR_RotateAxis( tf, tl, vr_aim_pitch.value );
+		VectorCopy( tf, aimdir );
 	}
 
 	if( vr_aim_trace.value )
@@ -1495,7 +1520,7 @@ static convar_t *vr_tune_vars[] =
 	&vr_vm_grip_x, &vr_vm_grip_y, &vr_vm_grip_z, &vr_vm_pitch, &vr_vm_yaw,
 	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut, &vr_vm_cut_pitch, &vr_vm_cut_yaw,
 	&vr_light_x, &vr_light_y, &vr_light_z, &vr_scope_x, &vr_scope_y, &vr_scope_z, &vr_scope_radius, &vr_scope_fov,
-	&vr_light_pitch, &vr_light_yaw, &vr_vm_mirror
+	&vr_light_pitch, &vr_light_yaw, &vr_vm_mirror, &vr_aim_pitch, &vr_aim_yaw
 };
 
 #define VR_TUNE_COUNT ( (int)( sizeof( vr_tune_vars ) / sizeof( vr_tune_vars[0] )))
@@ -1541,6 +1566,91 @@ static void VR_CaptureTuneDefaults( void )
 		vr_tune_base[i] = Q_atof( vr_tune_vars[i]->string );
 
 	vr_tune_have_base = true;
+}
+
+// built-in weapon profiles (the defaults for every install). A file vr_weapon_<model>.cfg in the game folder still overrides them.
+static const char *vr_builtin_profiles[][2] =
+{
+	{ "v_actions", "vr_vm_grip_x 10\nvr_vm_grip_y -7\nvr_vm_grip_z -10\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 40\nvr_vm_flip_roll 0\nvr_vm_scale 0.19\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_branch", "vr_vm_grip_x 13\nvr_vm_grip_y -6.5\nvr_vm_grip_z -8\nvr_vm_pitch 7\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 0.18\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0\nvr_scope_y 0\nvr_scope_z 3\nvr_scope_radius 1.2\nvr_scope_fov 10\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_camera", "vr_vm_grip_x 10\nvr_vm_grip_y -5\nvr_vm_grip_z -3\nvr_vm_pitch 60\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.02\nvr_hand_pitch 60\nvr_vm_arm_cut 20\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_flare", "vr_vm_grip_x 12\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 0\nvr_vm_yaw 10\nvr_vm_roll 60\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_flashlight", "vr_vm_grip_x 8\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 100\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 1.2\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 100\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_g43", "vr_vm_grip_x 4\nvr_vm_grip_y -1.5\nvr_vm_grip_z -2\nvr_vm_pitch 0\nvr_vm_yaw 2.3\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.45\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_glock", "vr_vm_grip_x 13\nvr_vm_grip_y -4\nvr_vm_grip_z -3\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_lantern", "vr_vm_grip_x 9\nvr_vm_grip_y 3\nvr_vm_grip_z -2\nvr_vm_pitch 20\nvr_vm_yaw 10\nvr_vm_roll 20\nvr_vm_flip_roll 0\nvr_vm_scale 0.45\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_m16", "vr_vm_grip_x 6\nvr_vm_grip_y -2.5\nvr_vm_grip_z -4\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.45\nvr_hand_pitch 60\nvr_vm_arm_cut 6\n" },
+	{ "v_mobile", "vr_vm_grip_x 8\nvr_vm_grip_y -4\nvr_vm_grip_z 2\nvr_vm_pitch 0\nvr_vm_yaw -60\nvr_vm_roll -40\nvr_vm_flip_roll 0\nvr_vm_scale 0.6\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch -10\nvr_light_yaw -80\nvr_vm_mirror -1\n" },
+	{ "v_mp5", "vr_vm_grip_x 10\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 5\nvr_vm_yaw -4\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.4\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 40\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_nightstick", "vr_vm_grip_x 8\nvr_vm_grip_y -3\nvr_vm_grip_z -3\nvr_vm_pitch 95\nvr_vm_yaw -150\nvr_vm_roll -90\nvr_vm_flip_roll 0\nvr_vm_scale 0.45\nvr_hand_pitch 60\nvr_vm_arm_cut 5\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_p345", "vr_vm_grip_x 14\nvr_vm_grip_y -4\nvr_vm_grip_z -3\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 6\n" },
+	{ "v_revolver", "vr_vm_grip_x 13\nvr_vm_grip_y -4\nvr_vm_grip_z -3\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_rifle", "vr_vm_grip_x 3\nvr_vm_grip_y -2\nvr_vm_grip_z -3\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.3\nvr_hand_pitch 60\nvr_vm_arm_cut 6\n" },
+	{ "v_shotgun", "vr_vm_grip_x 5\nvr_vm_grip_y -3\nvr_vm_grip_z -4\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\n" },
+	{ "v_sledgehammer", "vr_vm_grip_x 11\nvr_vm_grip_y -6\nvr_vm_grip_z -3\nvr_vm_pitch 40\nvr_vm_yaw 0\nvr_vm_roll -40\nvr_vm_flip_roll 0\nvr_vm_scale 0.6\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_switchblade", "vr_vm_grip_x 12\nvr_vm_grip_y -3\nvr_vm_grip_z -4.5\nvr_vm_pitch 0\nvr_vm_yaw 20\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 0.45\nvr_hand_pitch 60\nvr_vm_arm_cut 5\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_syringe", "vr_vm_grip_x 13\nvr_vm_grip_y -3\nvr_vm_grip_z -3\nvr_vm_pitch 50\nvr_vm_yaw 20\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 0.7\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_vp70", "vr_vm_grip_x 16\nvr_vm_grip_y -4\nvr_vm_grip_z -3\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 6\n" },
+	{ "v_wheelchair_browning", "vr_vm_grip_x 0\nvr_vm_grip_y 0\nvr_vm_grip_z -30\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.7\nvr_hand_pitch 60\nvr_vm_arm_cut 6\n" },
+};
+
+// set the numbers of a built-in profile (cvar name and value per line)
+static void VR_ApplyBuiltinProfile( const char *base )
+{
+	int i;
+
+	for( i = 0; i < (int)( sizeof( vr_builtin_profiles ) / sizeof( vr_builtin_profiles[0] )); i++ )
+	{
+		const char *p;
+
+		if( Q_stricmp( vr_builtin_profiles[i][0], base ))
+			continue;
+
+		p = vr_builtin_profiles[i][1];
+
+		while( *p )
+		{
+			char name[48], value[24];
+			int n = 0, m = 0;
+
+			while( *p && *p != ' ' && n < 47 ) name[n++] = *p++;
+			name[n] = 0;
+			while( *p == ' ' ) p++;
+			while( *p && *p != '\n' && m < 23 ) value[m++] = *p++;
+			value[m] = 0;
+			while( *p == '\n' ) p++;
+
+			if( n && m )
+				gEngfuncs.Cvar_SetValue( name, Q_atof( value ));
+		}
+
+		return;
+	}
+}
+
+// 0 = play the animation, 1 = hold its first frame, 2 = show its last frame
+int VR_AnimOverride( const char *label )
+{
+	if( !label || !label[0] )
+		return 0;
+
+	if( VR_ListMatches( vr_anim_still.string, label, true ))
+		return 1;
+
+	if( VR_ListMatches( vr_anim_end.string, label, true ))
+		return 2;
+
+	return 0;
+}
+
+qboolean VR_HandReady( void )
+{
+	return vr.in_eye_pass && vr.hand[1].valid && vr_hand_weapon.value;
+}
+
+const char *VR_EmptyHandName( void )
+{
+	return vr_empty_hand.string;
 }
 
 static void VR_UpdateWeaponProfile( void )
@@ -1593,6 +1703,7 @@ static void VR_UpdateWeaponProfile( void )
 		vr_light_state = -1;
 		vr_light_label[0] = 0;
 		vr_vm_mirror_auto = VR_ListMatches( vr_mirror_models.string, base, true );
+		VR_ApplyBuiltinProfile( base );
 		vr_equip_time = gp_cl->time;
 		gEngfuncs.Cvar_SetValue( "vr_in_melee", vr_vm_melee ? 1.0f : 0.0f );
 	}
@@ -2263,6 +2374,19 @@ static void VR_RoomFollow( const ref_viewpass_t *game )
 	VR_RotateZ( hp, d, hp );
 	hp[2] = 0.0f;
 	len = VectorLength( hp );
+
+	// the body is stuck (a wall): the view is pulled back to a small distance from it, you cannot look through the wall
+	if( vr_room_maxlag.value > 0.0f && len > vr_room_maxlag.value )
+	{
+		vec3_t push;
+
+		VectorScale( hp, ( len - vr_room_maxlag.value ) / len, push );
+		VR_RotateZ( push, -d, push );
+		vr.ref_pos[0] += push[0];
+		vr.ref_pos[1] += push[1];
+		VectorScale( hp, vr_room_maxlag.value / len, hp );
+		len = vr_room_maxlag.value;
+	}
 
 	if( !following && len > vr_room_deadzone.value )
 		following = true;
@@ -3188,6 +3312,9 @@ static void VR_DrawHands( void )
 
 void VR_EndEyePass( int eye )
 {
+	if( vr_eye_flush.value >= 2.0f ) pglFinish();
+	else if( vr_eye_flush.value >= 1.0f ) pglFlush();
+
 	int w, h;
 
 	vr.in_eye_pass = false;

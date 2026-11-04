@@ -23,8 +23,12 @@ key presses and the mouse cursor for menus.
 
 // published by the renderer each frame, not meant to be set by hand
 static CVAR_DEFINE_AUTO( vr_in_active, "0", 0, "(internal) VR controllers are active" );
+static CVAR_DEFINE_AUTO( vr_ui_debug, "0", 0, "1 = print what screen is open and what commands the game sends (to find out what the computer screen is)" );
+static CVAR_DEFINE_AUTO( vr_sound_debug, "0", 0, "1 = print the names of the sounds your own character makes (to mute the extra footstep)" );
+static CVAR_DEFINE_AUTO( vr_keyboard_cmd, "", FCVAR_ARCHIVE, "the SteamVR keyboard opens when the game sends a command containing one of these parts (separated by +). See vr_ui_debug" );
+static CVAR_DEFINE_AUTO( vr_keyboard_close_cmd, "", FCVAR_ARCHIVE, "the keyboard closes when the game sends a command containing one of these parts (separated by +)" );
 static CVAR_DEFINE_AUTO( vr_keyboard_auto, "1", FCVAR_ARCHIVE, "1 = the SteamVR keyboard opens by itself when a screen with a mouse cursor opens in one of the maps in vr_keyboard_maps (the computer)" );
-static CVAR_DEFINE_AUTO( vr_keyboard_maps, "cafe", FCVAR_ARCHIVE, "map names (parts, separated by +) where vr_keyboard_auto works. Empty = every map" );
+static CVAR_DEFINE_AUTO( vr_keyboard_maps, "", FCVAR_ARCHIVE, "map names (parts, separated by +) where vr_keyboard_auto works. Empty = every map" );
 static CVAR_DEFINE_AUTO( vr_in_kbd, "0", 0, "(internal) the keyboard should be open" );
 static CVAR_DEFINE_AUTO( vr_in_kbd_chars, "", 0, "(internal) typed characters waiting to be sent to the game" );
 static CVAR_DEFINE_AUTO( vr_in_kbd_closed, "0", 0, "(internal) the player closed the keyboard" );
@@ -67,13 +71,13 @@ static CVAR_DEFINE_AUTO( vr_in_hit_z, "0", 0, "(internal)" );
 static CVAR_DEFINE_AUTO( vr_in_shot, "0", 0, "(internal) counts the shots the weapon in hand has fired" );
 static CVAR_DEFINE_AUTO( vr_in_duck_drop, "0", 0, "(internal) how many units the game has lowered the view for the character's own crouch" );
 static CVAR_DEFINE_AUTO( vr_in_hit_ok, "0", 0, "(internal) the hand ray hits the world" );
-static CVAR_DEFINE_AUTO( vr_bullet_holes, "1", FCVAR_ARCHIVE, "1 = a bullet hole appears where the hand ray hits when you fire a gun (to see where you aim)" );
+static CVAR_DEFINE_AUTO( vr_bullet_holes, "0", FCVAR_ARCHIVE, "1 = a bullet hole appears where the hand ray hits when you fire a gun (to see where you aim)" );
 static CVAR_DEFINE_AUTO( vr_in_mask, "0", 0, "(internal) buttons the reload system keeps away from the game" );
 static CVAR_DEFINE_AUTO( vr_in_noswing, "0", 0, "(internal) no melee swings right now (reloading)" );
 static CVAR_DEFINE_AUTO( vr_in_reload, "0", 0, "(internal) the reload system finished a manual reload: press the reload key" );
 
 // settings
-static CVAR_DEFINE_AUTO( vr_turn_mode, "0", FCVAR_ARCHIVE, "0 = snap turn, 1 = smooth turn" );
+static CVAR_DEFINE_AUTO( vr_turn_mode, "1", FCVAR_ARCHIVE, "0 = snap turn, 1 = smooth turn" );
 static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in degrees" );
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
 static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = body (mouse), 1 = head, 2 = right hand while you use/shoot and head otherwise (default), 3 = right hand always" );
@@ -195,7 +199,7 @@ qboolean IN_VRGetRay( vec3_t origin, vec3_t dir )
 }
 
 // ---- SteamVR keyboard: the characters typed on it become key presses for the game
-static qboolean kbd_manual, kbd_dismissed;
+static qboolean kbd_manual, kbd_dismissed, kbd_cmd_open;
 static float room_until;
 
 static void IN_VRKeyboard_f( void )
@@ -252,11 +256,47 @@ static void IN_VRTypeChar( int ch )
 	if( shift ) Key_Event( K_SHIFT, false );
 }
 
+static qboolean IN_VRNameInList( const char *list, const char *name )
+{
+	const char *p = list;
+
+	while( *p )
+	{
+		char tok[48];
+		int n = 0;
+
+		while( *p == '+' || *p == ' ' ) p++;
+		while( *p && *p != '+' && n < 47 ) tok[n++] = *p++;
+		tok[n] = 0;
+
+		if( n && Q_stristr( name, tok ))
+			return true;
+	}
+
+	return false;
+}
+
+// every command the game's client sends (from cl_game.c)
+void IN_VRClientCmd( const char *cmd )
+{
+	if( vr_ui_debug.value )
+		Con_Printf( "VR ui: the game sends the command '%s'\n", cmd );
+
+	if( vr_keyboard_cmd.string[0] && IN_VRNameInList( vr_keyboard_cmd.string, cmd ))
+		kbd_cmd_open = true;
+	else if( vr_keyboard_close_cmd.string[0] && IN_VRNameInList( vr_keyboard_close_cmd.string, cmd ))
+		kbd_cmd_open = false;
+}
+
 void IN_VRInit( void )
 {
 	int i;
 
 	Cvar_RegisterVariable( &vr_in_active );
+	Cvar_RegisterVariable( &vr_ui_debug );
+	Cvar_RegisterVariable( &vr_sound_debug );
+	Cvar_RegisterVariable( &vr_keyboard_cmd );
+	Cvar_RegisterVariable( &vr_keyboard_close_cmd );
 	Cvar_RegisterVariable( &vr_keyboard_auto );
 	Cvar_RegisterVariable( &vr_keyboard_maps );
 	Cvar_RegisterVariable( &vr_in_kbd );
@@ -465,17 +505,31 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		if( !ui_open && cls.key_dest == key_game )
 			kbd_manual = false;
 
+		if( vr_ui_debug.value )
+		{
+			static int last_mouse = -1, last_dest = -1;
+
+			if( last_mouse != host.mouse_visible || last_dest != cls.key_dest )
+			{
+				Con_Printf( "VR ui: mouse cursor %s, key_dest %d, map %s\n", host.mouse_visible ? "shown" : "hidden", (int)cls.key_dest, clgame.mapname );
+				last_mouse = host.mouse_visible;
+				last_dest = cls.key_dest;
+			}
+		}
+
+
 		if( vr_in_kbd_closed.value )
 		{
 			kbd_dismissed = true;
 			kbd_manual = false;
+			kbd_cmd_open = false;
 			Cvar_DirectSetValue( &vr_in_kbd_closed, 0.0f );
 		}
 
 		if( !ui_open && !kbd_manual )
 			kbd_dismissed = false;
 
-		want = !kbd_dismissed && ( kbd_manual || ( ui_open && vr_keyboard_auto.value && IN_VRKeyboardMap( )));
+		want = !kbd_dismissed && ( kbd_manual || kbd_cmd_open || ( ui_open && vr_keyboard_auto.value && vr_keyboard_maps.string[0] && IN_VRKeyboardMap( )));
 
 		if(( vr_in_kbd.value >= 0.5f ) != want )
 			Cvar_DirectSetValue( &vr_in_kbd, want ? 1.0f : 0.0f );
@@ -490,6 +544,22 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 
 			for( c = copy; *c; c++ )
 				IN_VRTypeChar(( unsigned char )*c );
+		}
+	}
+
+	if( vr_in_active.value > 0.0f && cls.state == ca_active )
+	{
+		// things that make a VR picture uncomfortable are switched off on every map
+		static char forced_map[64];
+
+		if( Q_strcmp( forced_map, clgame.mapname ))
+		{
+			convar_t *cv;
+
+			Q_strncpy( forced_map, clgame.mapname, sizeof( forced_map ));
+
+			if(( cv = Cvar_FindVar( "cl_noiseeffect" )) != NULL ) Cvar_DirectSetValue( cv, 0.0f );
+			if(( cv = Cvar_FindVar( "gl_screenblur" )) != NULL ) Cvar_DirectSetValue( cv, 0.0f );
 		}
 	}
 
@@ -845,8 +915,8 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			float vf, vs, len;
 
 			AngleVectors( ang, f, r, NULL );
-			vf = ( ox * f[0] + oy * f[1] ) * 6.0f;
-			vs = ( ox * r[0] + oy * r[1] ) * 6.0f;
+			vf = ( ox * f[0] + oy * f[1] ) * 10.0f;
+			vs = ( ox * r[0] + oy * r[1] ) * 10.0f;
 			len = sqrt( vf * vf + vs * vs );
 
 			if( len > 250.0f )

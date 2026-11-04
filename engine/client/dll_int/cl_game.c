@@ -20,6 +20,8 @@ GNU General Public License for more details.
 #endif // XASH_SDL
 
 #include "common.h"
+
+extern void IN_VRClientCmd( const char *cmd );
 #include "client.h"
 #include "const.h"
 #include "triangleapi.h"
@@ -1792,6 +1794,8 @@ static int GAME_EXPORT pfnServerCmd( const char *szCmdString )
 	if( COM_StringEmptyOrNULL( szCmdString ))
 		return 0;
 
+	IN_VRClientCmd( szCmdString );
+
 	// Cry of Fear: the original GoldSrc engine handles the client's tape-recorder save
 	// request ("savehack cofsave1" .. "savehack cofsave5") itself. Without this, it falls
 	// through as an unknown command and no save file is written.
@@ -1837,6 +1841,8 @@ static int GAME_EXPORT pfnClientCmd( const char *szCmdString )
 {
 	if( COM_StringEmptyOrNULL( szCmdString ))
 		return 0;
+
+	IN_VRClientCmd( szCmdString );
 
 	if( cls.initialized )
 	{

@@ -645,6 +645,15 @@ static qboolean S_VRMuted( int ent, int chan, const sfx_t *sfx )
 	static convar_t *on, *list, *own, *quiet, *steps;
 	const char *p;
 
+	{
+		static convar_t *dbg;
+
+		if( !dbg ) dbg = Cvar_FindVar( "vr_sound_debug" );
+
+		if( dbg && dbg->value && ( ent == cl.playernum + 1 || ent == cl.viewentity ))
+			Con_Printf( "VR sound: ent %d chan %d '%s'\n", ent, chan, sfx->name );
+	}
+
 	// footsteps of someone who only walks around his room (the game would play a whole walk for a millimeter)
 	if( !quiet ) quiet = Cvar_FindVar( "vr_in_room_quiet" );
 	if( !steps ) steps = Cvar_FindVar( "vr_quiet_steps" );

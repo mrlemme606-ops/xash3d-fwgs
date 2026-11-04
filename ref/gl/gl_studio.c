@@ -3672,6 +3672,7 @@ static void R_VRDrawLeftHand( void )
 	RI.currentmodel = mod;
 	tr.blend = 1.0f;
 
+	tr.fFlipViewModel = false;	// a mirrored weapon (the flare) must not mirror the left hand too
 	VR_SetHandPass( true );
 	g_studio.interpolate = false;
 	R_StudioSetupTimings();
@@ -3745,14 +3746,42 @@ void R_DrawViewModel( void )
 	if( FBitSet( RI.rvp.flags, RF_DRAW_CUBEMAP ) || ENGINE_GET_PARM( PARM_LOCAL_HEALTH ) <= 0 || !CL_IsViewEntityLocalPlayer())
 		return;
 
+	// VR: nothing in hand: the fists model is the right hand
+	model_t *vr_empty_saved = NULL;
+	int vr_empty_rm = 0, vr_empty_amt = 0, vr_empty_fx = 0, vr_empty_seq = 0;
+	float vr_empty_frame = 0.0f;
+	qboolean vr_empty = false;
+
+	if( VR_HandReady( ) && VR_EmptyHandName()[0] && ( !view->model || Q_stristr( view->model->name, "null.mdl" )))
+	{
+		model_t *hand = gEngfuncs.Mod_ForName( VR_EmptyHandName(), false, true );
+
+		if( hand && hand->type == mod_studio )
+		{
+			vr_empty_saved = view->model;
+			vr_empty_rm = view->curstate.rendermode;
+			vr_empty_amt = view->curstate.renderamt;
+			vr_empty_fx = view->curstate.renderfx;
+			vr_empty_seq = view->curstate.sequence;
+			vr_empty_frame = view->curstate.frame;
+			view->model = hand;
+			view->curstate.rendermode = kRenderNormal;
+			view->curstate.renderamt = 255;
+			view->curstate.renderfx = 0;
+			view->curstate.sequence = 0;
+			view->curstate.frame = 0.0f;
+			vr_empty = true;
+		}
+	}
+
 	tr.blend = CL_FxBlend( view ) / 255.0f;
 	if( !R_ModelOpaque( view->curstate.rendermode ) && tr.blend <= 0.0f )
-		return; // invisible ?
+		goto vr_empty_done; // invisible ?
 
 	RI.currententity = view;
 
 	if( !RI.currententity->model )
-		return;
+		goto vr_empty_done;
 
 	// VR: draw the weapon where the right hand is
 	vec3_t vr_origin, vr_angles, saved_origin, saved_angles;
@@ -3831,6 +3860,23 @@ void R_DrawViewModel( void )
 				view->curstate.frame = 0.0f;
 				g_studio.interpolate = false;
 			}
+			else if( view->curstate.sequence >= 0 && view->curstate.sequence < vhdr->numseq )
+			{
+				// idle and draw animations never play: the weapon holds one pose, so the aim stays steady
+				mstudioseqdesc_t *cs = (mstudioseqdesc_t *)((byte *)vhdr + vhdr->seqindex) + view->curstate.sequence;
+				int ov = VR_AnimOverride( cs->label );
+
+				if( ov == 1 )
+				{
+					view->curstate.frame = 0.0f;
+					g_studio.interpolate = false;
+				}
+				else if( ov == 2 )
+				{
+					view->curstate.frame = 255.0f;
+					g_studio.interpolate = false;
+				}
+			}
 		}
 	}
 
@@ -3871,6 +3917,17 @@ void R_DrawViewModel( void )
 	{
 		VectorCopy( saved_origin, view->origin );
 		VectorCopy( saved_angles, view->angles );
+	}
+
+vr_empty_done:
+	if( vr_empty )
+	{
+		view->model = vr_empty_saved;
+		view->curstate.rendermode = vr_empty_rm;
+		view->curstate.renderamt = vr_empty_amt;
+		view->curstate.renderfx = vr_empty_fx;
+		view->curstate.sequence = vr_empty_seq;
+		view->curstate.frame = vr_empty_frame;
 	}
 }
 
