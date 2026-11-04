@@ -15,6 +15,15 @@ the Free Software Foundation, either version 3 of the License, or
 #include <stdint.h>
 
 void VR_InitCvars( void );
+
+// keeps Cry of Fear's client.dll renderer in step with the eye passes (gl_vr_cof.c)
+void VR_CofInitCvars( void );
+qboolean VR_CofActive( void );		// client.dll found, checked and the re-arm is switched on
+qboolean VR_CofFrameArmed( void );	// this frame's eye passes are being re-armed
+qboolean VR_CofKeepPrepass( void );
+void VR_CofBeginFrame( void );
+void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin );
+void VR_CofEndFrame( void );
 void VR_NewFrame( void );
 qboolean VR_BeginMainPass( const ref_viewpass_t *game );
 void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out );

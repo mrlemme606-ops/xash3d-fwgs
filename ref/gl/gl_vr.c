@@ -485,6 +485,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_clip_tex );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_arm_cut );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_dump_tex );
+	VR_CofInitCvars();
 	VR_InputInitCvars();
 	VR_ReloadInitCvars();
 	VR_UIInitCvars();
@@ -1087,11 +1088,21 @@ static void VR_Center_f( void )
 
 int VR_EyePrepass( void )
 {
-	return bound( 0, (int)vr_eye_prepass.value, 2 );
+	int v = bound( 0, (int)vr_eye_prepass.value, 2 );
+
+	// drawing an eye twice was a workaround for the DLL's one-shot pass; with the re-arm it only costs frame rate
+	if( v && VR_CofFrameArmed() && !VR_CofKeepPrepass())
+		return 0;
+
+	return v;
 }
 
 qboolean VR_SkyModelsOn( void )
 {
+	// our own sky dome fights with the sky the game's client.dll draws (it clears the picture and ignores depth)
+	if( VR_CofActive())
+		return false;
+
 	return vr_sky_models.value != 0.0f;
 }
 

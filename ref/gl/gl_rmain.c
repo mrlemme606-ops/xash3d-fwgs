@@ -1073,6 +1073,7 @@ void R_RenderScene( void )
 	tr.dlightframecount = R_PushDlights( WORLDMODEL, tr.framecount );
 
 	R_SetupFrustum();
+	VR_CofBeforePass( RI.frustum.planes, RI.rvp.vieworigin );	// no-op unless a VR frame with Cry of Fear's client.dll
 	R_SetupFrame();
 	R_SetupGL( true );
 	R_Clear( ~0 );
@@ -1208,6 +1209,7 @@ void R_RenderFrame( const ref_viewpass_t *rvp )
 
 		R_SetupRefParams( rvp );
 		tr.fCustomRendering = false;
+		VR_CofBeginFrame();
 		R_RunViewmodelEvents();
 		tr.realframecount++;
 
@@ -1241,6 +1243,7 @@ void R_RenderFrame( const ref_viewpass_t *rvp )
 			VR_EndEyePass( eye );
 		}
 
+		VR_CofEndFrame();
 		VR_FinishFrame();
 		return;
 	}
