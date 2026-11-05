@@ -543,6 +543,10 @@ static void CL_DrawScreenFade( void )
 	if( !alpha )
 		return;
 
+	// VR: a black fade (doors, saving, boats, level changes) only breaks the immersion, so it is not drawn
+	if( !FBitSet( sf->fadeFlags, FFADE_MODULATE ) && sf->fader + sf->fadeg + sf->fadeb < 60 && Cvar_VariableInteger( "vr_enable" ))
+		return;
+
 	if( !FBitSet( sf->fadeFlags, FFADE_MODULATE ))
 	{
 		ref.dllFuncs.GL_SetRenderMode( kRenderTransTexture );

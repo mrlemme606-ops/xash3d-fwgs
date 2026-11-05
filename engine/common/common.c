@@ -610,9 +610,15 @@ so a shot goes exactly where the weapon points, standing, crouching, moving or j
 The text is changed in place; a shorter number is padded with spaces.
 =============
 */
+static qboolean COM_SpreadDelim( byte c )
+{
+	return c <= ' ' || c == '"' || c == '{' || c == '}' || c == '=' || c == ':' || c == ',' || c == ';';
+}
+
 static void COM_ZeroSpreadTable( byte *data, int length )
 {
-	static const char *keys[] = { "minspread", "maxspread", "expand", "speed", "jump" };
+	// spread (minspread, maxspread, expand, speed, jump) and recoil (minpunch, maxpunch)
+	static const char *keys[] = { "minspread", "maxspread", "expand", "speed", "jump", "minpunch", "maxpunch" };
 	int i = 0;
 
 	while( i < length )
@@ -625,14 +631,14 @@ static void COM_ZeroSpreadTable( byte *data, int length )
 			continue;
 		}
 
-		if( data[i] <= ' ' || data[i] == '"' || data[i] == '{' || data[i] == '}' )
+		if( COM_SpreadDelim( data[i] ))
 		{
 			i++;
 			continue;
 		}
 
 		start = i;
-		while( i < length && data[i] > ' ' && data[i] != '"' && data[i] != '{' && data[i] != '}' ) i++;
+		while( i < length && !COM_SpreadDelim( data[i] )) i++;
 		len = i - start;
 
 		for( k = 0; k < (int)ARRAYSIZE( keys ); k++ )
@@ -643,12 +649,13 @@ static void COM_ZeroSpreadTable( byte *data, int length )
 				continue;
 
 			// the value is the next token
-			while( i < length && ( data[i] <= ' ' || data[i] == '"' )) i++;
-			if( i < length && data[i] != '{' && data[i] != '}' )
+			while( i < length && COM_SpreadDelim( data[i] ) && data[i] != '{' && data[i] != '}' && data[i] != '\n' ) i++;
+
+			if( i < length && !COM_SpreadDelim( data[i] ))
 			{
 				int vs = i;
 
-				while( i < length && data[i] > ' ' && data[i] != '"' ) i++;
+				while( i < length && !COM_SpreadDelim( data[i] )) i++;
 				data[vs] = '0';
 				for( vs++; vs < i; vs++ )
 					data[vs] = ' ';

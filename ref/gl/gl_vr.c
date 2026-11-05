@@ -131,10 +131,8 @@ static CVAR_DEFINE_AUTO( vr_crouch_height, "0.30", FCVAR_ARCHIVE, "meters below 
 static CVAR_DEFINE_AUTO( vr_crouch_comp, "28", FCVAR_ARCHIVE, "units the view is given back when you crouch (the game lowers it too, so it is not counted twice). 0 = measured automatically (experimental)" );
 static CVAR_DEFINE_AUTO( vr_nofreeze_models, "", 0, "weapons that are never held in the idle pose (their own animation is used): part of the file name, + between names" );
 static CVAR_DEFINE_AUTO( vr_vm_rot_local, "1", FCVAR_ARCHIVE, "1 = the weapon's pitch/yaw/roll turn in the hand's own axes. 0 = the old way (added to world angles)" );
-static CVAR_DEFINE_AUTO( vr_light_toggle_seq, "switch", 0, "animation name fragments of a flashlight's switch animation: each time it plays, the light flips on/off" );
 static CVAR_DEFINE_AUTO( vr_light_pitch, "0", 0, "tilt the spotlight up (+) or down (-) from where the controller points, degrees (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_light_yaw, "0", 0, "turn the spotlight left (+) or right (-) from where the controller points, degrees (saved per weapon)" );
-static CVAR_DEFINE_AUTO( vr_flare_time, "0", 0, "seconds a flare burns (0 = by difficulty: 120 / 90 / 60 / 30)" );
 static CVAR_DEFINE_AUTO( vr_vm_mirror, "-1", 0, "mirror the weapon in hand left-right: -1 = automatic (vr_mirror_models), 0 = never, 1 = always (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_mirror_models, "flare", 0, "weapon model names (separated by +) that the game holds in the left hand, mirrored to the right" );
 static CVAR_DEFINE_AUTO( vr_eye_prepass, "2", FCVAR_ARCHIVE, "draw an eye twice and keep the second picture (for objects that are black in one eye, or a sky that lags, when the game's opengl32.dll is used): 1 = left eye twice, 2 = both eyes twice" );
@@ -150,13 +148,9 @@ static CVAR_DEFINE_AUTO( vr_room_maxlag, "14", FCVAR_ARCHIVE, "how far (game uni
 static CVAR_DEFINE_AUTO( vr_eye_flush, "0", FCVAR_ARCHIVE, "experiment for thin / see-through textures that are missing in VR: 1 = glFlush, 2 = glFinish at the end of each eye" );
 static CVAR_DEFINE_AUTO( vr_aim_pitch, "0", 0, "aim the shots higher (+) or lower (-) than the controller points, degrees (saved per weapon). For items like the camera" );
 static CVAR_DEFINE_AUTO( vr_aim_yaw, "0", 0, "aim the shots to the left (+) or right (-) of where the controller points, degrees (saved per weapon)" );
-static CVAR_DEFINE_AUTO( vr_light_debug, "1", 0, "1 = print the animation name of a phone / flashlight / flare whenever it changes (to tune vr_light_on_seq / vr_light_off_seq)" );
-static CVAR_DEFINE_AUTO( vr_light_on_seq, "flash+_on+burn+ignite+light_on+idle_lit", 0, "animation name fragments (separated by +) that mean the light is ON" );
-static CVAR_DEFINE_AUTO( vr_light_off_seq, "sms+_off+unlit+extinguish+light_off+flare_idle+throw", 0, "animation name fragments (separated by +) that mean the light is OFF" );
 static CVAR_DEFINE_AUTO( vr_light_x, "6", 0, "where the light sits, forward of the hand (weapon axes, saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_light_y, "0", 0, "where the light sits, left of the hand (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_light_z, "0", 0, "where the light sits, above the hand (saved per weapon)" );
-static CVAR_DEFINE_AUTO( vr_kill_body_light, "1", 0, "1 = while you hold a phone, flashlight, flare or lantern, remove the game's own lights around your body (they float where your body is, not your hand)" );
 static CVAR_DEFINE_AUTO( vr_scope, "1", FCVAR_ARCHIVE, "1 = rifle scope: lift the rifle to your eye and the scope shows a zoomed view" );
 static CVAR_DEFINE_AUTO( vr_scope_models, "rifle+sniper+hunting", 0, "weapon model names (separated by +) that have a scope" );
 static CVAR_DEFINE_AUTO( vr_scope_fov, "2", 0, "field of view of the scope image in degrees (smaller = more zoom, saved per weapon)" );
@@ -196,7 +190,6 @@ static CVAR_DEFINE_AUTO( vr_static_models, "mobile+flashlight+flare+lantern+syri
 static CVAR_DEFINE_AUTO( vr_melee_models, "fist+actions+axe+branch+nightstick+sledge+pickaxe+shovel+switchblade", 0, "weapon model names (part of the file name) that are swung by hand. Separate with +" );
 static CVAR_DEFINE_AUTO( vr_melee_reach, "64", FCVAR_ARCHIVE, "how far in front of your swinging hand the game looks for something to hit, in units" );
 static CVAR_DEFINE_AUTO( vr_omni_models, "flare+lantern", 0, "weapon model names that light up everything around your hand (flare, lantern). Separate with +" );
-static CVAR_DEFINE_AUTO( vr_omni_radius, "260", FCVAR_ARCHIVE, "size of the light around a flare or lantern, in units" );
 static CVAR_DEFINE_AUTO( vr_lhand, "1", FCVAR_ARCHIVE, "1 = a left hand is drawn at your left controller" );
 static CVAR_DEFINE_AUTO( vr_lhand_model, "models/weapons/switchblade/v_switchblade.mdl", 0, "weapon model whose left arm is used as the left hand" );
 static CVAR_DEFINE_AUTO( vr_lhand_hide_bones, "^r_+grippity+blade", 0, "parts of the left hand model that are not drawn (the right arm and the weapon). Separate with +" );
@@ -216,8 +209,8 @@ static CVAR_DEFINE_AUTO( vr_vm_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the weapon 
 static CVAR_DEFINE_AUTO( vr_phone_light, "1", FCVAR_ARCHIVE, "1 = a spotlight shines from the weapons listed in vr_light_models, where your hand points" );
 static CVAR_DEFINE_AUTO( vr_light_models, "mobile+flashlight", 0, "weapon model names (part of the file name) that work as a flashlight. Separate with +" );
 static CVAR_DEFINE_AUTO( vr_light_distance, "700", FCVAR_ARCHIVE, "how far the flashlight reaches, in units" );
-static CVAR_DEFINE_AUTO( vr_light_radius, "150", FCVAR_ARCHIVE, "size of the lit area, in units" );
-static CVAR_DEFINE_AUTO( vr_light_brightness, "200", FCVAR_ARCHIVE, "brightness of the flashlight, 0 to 255" );
+static CVAR_DEFINE_AUTO( vr_empty_hand_seq, "8", FCVAR_ARCHIVE, "animation of the empty fist model (v_actions.mdl) that is shown when your hand is empty. -1 = whatever the game plays" );
+static CVAR_DEFINE_AUTO( vr_empty_hand_frame, "0", FCVAR_ARCHIVE, "frame of that animation" );
 static CVAR_DEFINE_AUTO( vr_vm_lock_seq, "-1", 0, "testing: show this animation sequence of the weapon model (-1 = normal). vr_vm_seqlist lists them" );
 static CVAR_DEFINE_AUTO( vr_vm_lock_frame, "0", 0, "testing: frame of that sequence to hold" );
 static CVAR_DEFINE_AUTO( vr_melee_freeze, "1", FCVAR_ARCHIVE, "1 = melee weapons hold their first animation frame, so only your real arm swings" );
@@ -401,12 +394,13 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_static_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_freeze );
+	gEngfuncs.Cvar_RegisterVariable( &vr_empty_hand_seq );
+	gEngfuncs.Cvar_RegisterVariable( &vr_empty_hand_frame );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_lock_seq );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_lock_frame );
 	gEngfuncs.Cmd_AddCommand( "vr_vm_seqlist", VR_DumpSequences, "list the animation sequences of the weapon you hold" );
 	gEngfuncs.Cvar_RegisterVariable( &vr_phone_light );
 	gEngfuncs.Cvar_RegisterVariable( &vr_omni_models );
-	gEngfuncs.Cvar_RegisterVariable( &vr_omni_radius );
 	gEngfuncs.Cvar_RegisterVariable( &vr_lhand );
 	gEngfuncs.Cvar_RegisterVariable( &vr_lhand_model );
 	gEngfuncs.Cvar_RegisterVariable( &vr_lhand_hide_bones );
@@ -427,8 +421,6 @@ void VR_InitCvars( void )
 	gEngfuncs.Cmd_AddCommand( "vr_skyinfo", VR_SkyInfo_f, "print the sky the map asks for and any sky model entities, to work out how the map draws its sky" );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_distance );
-	gEngfuncs.Cvar_RegisterVariable( &vr_light_radius );
-	gEngfuncs.Cvar_RegisterVariable( &vr_light_brightness );
 	gEngfuncs.Cvar_RegisterVariable( &vr_aim_trace );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_yaw );
@@ -450,13 +442,9 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_eye_flush );
 	gEngfuncs.Cvar_RegisterVariable( &vr_aim_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_aim_yaw );
-	gEngfuncs.Cvar_RegisterVariable( &vr_light_debug );
-	gEngfuncs.Cvar_RegisterVariable( &vr_light_on_seq );
-	gEngfuncs.Cvar_RegisterVariable( &vr_light_off_seq );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_x );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_y );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_z );
-	gEngfuncs.Cvar_RegisterVariable( &vr_kill_body_light );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_fov );
@@ -466,10 +454,8 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_radius );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_cam );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_range );
-	gEngfuncs.Cvar_RegisterVariable( &vr_light_toggle_seq );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_light_yaw );
-	gEngfuncs.Cvar_RegisterVariable( &vr_flare_time );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_mirror );
 	gEngfuncs.Cvar_RegisterVariable( &vr_mirror_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_eye_prepass );
@@ -702,9 +688,6 @@ static qboolean vr_vm_static;	// the weapon in hand never animates (phone, syrin
 static qboolean vr_vm_light;	// the weapon in hand is a flashlight (the phone)
 static qboolean vr_vm_melee;	// the weapon in hand is swung by hand
 static qboolean vr_vm_scope;	// the weapon in hand has a scope
-static int vr_light_state = -1;	// -1 = unknown, 0 = off, 1 = on, from the animation the game plays
-static char vr_light_label[40];
-static float vr_light_last_anim, vr_toggle_time, vr_equip_time, vr_flare_end;
 static char vr_tune_model[64];
 static qboolean vr_vm_mirror_auto;
 static qboolean vr_pose_axes_ok;	// the weapon can be drawn straight from its axes (no flip_roll)
@@ -1413,7 +1396,17 @@ qboolean VR_ViewModelFrozen( void )
 qboolean VR_ViewModelLock( int *seq, float *frame )
 {
 	if( vr_vm_lock_seq.value < 0.0f )
+	{
+		// empty hand: the fist is shown in one fixed pose, not in whatever frame its animation is on
+		if( vr_empty_hand_seq.value >= 0.0f && VR_ContainsNoCase( vr_tune_model, "v_actions" ))
+		{
+			*seq = (int)vr_empty_hand_seq.value;
+			*frame = vr_empty_hand_frame.value;
+			return true;
+		}
+
 		return false;
+	}
 
 	*seq = (int)vr_vm_lock_seq.value;
 	*frame = vr_vm_lock_frame.value;
@@ -1582,7 +1575,7 @@ static void VR_CaptureTuneDefaults( void )
 // built-in weapon profiles (the defaults for every install). A file vr_weapon_<model>.cfg in the game folder still overrides them.
 static const char *vr_builtin_profiles[][2] =
 {
-	{ "v_actions", "vr_vm_grip_x 10\nvr_vm_grip_y -7\nvr_vm_grip_z -10\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 40\nvr_vm_flip_roll 0\nvr_vm_scale 0.19\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_actions", "vr_vm_grip_x -12\nvr_vm_grip_y -20\nvr_vm_grip_z -11\nvr_vm_pitch -70\nvr_vm_yaw 80\nvr_vm_roll -10\nvr_vm_flip_roll 0\nvr_vm_scale 0.19\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_branch", "vr_vm_grip_x 13\nvr_vm_grip_y -6.5\nvr_vm_grip_z -8\nvr_vm_pitch 7\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 0.18\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0\nvr_scope_y 0\nvr_scope_z 3\nvr_scope_radius 1.2\nvr_scope_fov 10\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_camera", "vr_vm_grip_x 10\nvr_vm_grip_y -5\nvr_vm_grip_z -3\nvr_vm_pitch 60\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.02\nvr_hand_pitch 60\nvr_vm_arm_cut 20\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_flare", "vr_vm_grip_x 12\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 0\nvr_vm_yaw 10\nvr_vm_roll 60\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
@@ -1675,7 +1668,6 @@ static void VR_UpdateWeaponProfile( void )
 		// nothing in hand (new map, menu): forget the weapon, so a stale light cannot stay on
 		vr_tune_model[0] = 0;
 		vr_vm_light = vr_vm_omni = vr_vm_flare = vr_vm_scope = false;
-		vr_light_state = -1;
 		return;
 	}
 
@@ -1711,11 +1703,8 @@ static void VR_UpdateWeaponProfile( void )
 		vr_vm_omni = VR_ListMatches( vr_omni_models.string, base, true );
 		vr_vm_flare = VR_ContainsNoCase( base, "flare" );
 		vr_vm_scope = VR_ListMatches( vr_scope_models.string, base, true );
-		vr_light_state = -1;
-		vr_light_label[0] = 0;
 		vr_vm_mirror_auto = VR_ListMatches( vr_mirror_models.string, base, true );
 		VR_ApplyBuiltinProfile( base );
-		vr_equip_time = gp_cl->time;
 		gEngfuncs.Cvar_SetValue( "vr_in_melee", vr_vm_melee ? 1.0f : 0.0f );
 	}
 
@@ -1956,376 +1945,47 @@ static void VR_SkyInfo_f( void )
 	gEngfuncs.Con_Printf( "%d sky model entities in the scene (of %d)\n", count, n );
 }
 
-#define VR_LIGHT_KEY	0x5652	// so we always reuse the same dynamic light
-
-static dlight_t *VR_AllocLightKey( int key )
-{
-	int i, freeslot = -1;
-
-	for( i = 0; i < MAX_DLIGHTS; i++ )
-	{
-		if( gp_dlights[i].key == key )
-			return &gp_dlights[i];
-
-		if( freeslot < 0 && ( gp_dlights[i].die < gp_cl->time || !gp_dlights[i].radius ))
-			freeslot = i;
-	}
-
-	if( freeslot < 0 )
-		return NULL;
-
-	memset( &gp_dlights[freeslot], 0, sizeof( dlight_t ));
-	gp_dlights[freeslot].key = key;
-	return &gp_dlights[freeslot];
-}
-
-static dlight_t *VR_AllocLight( void )
-{
-	return VR_AllocLightKey( VR_LIGHT_KEY );
-}
-
-// the last place in "label" where one of the +separated fragments in "list" ends (-1 = no fragment found)
-static int VR_LastMatchEnd( const char *list, const char *label )
-{
-	const char *p = list;
-	size_t ln = strlen( label );
-	int best = -1;
-
-	while( p && *p )
-	{
-		char frag[48];
-		size_t n = 0, i, k;
-
-		while( *p == '+' || *p == ',' || *p == ' ' || *p == '|' ) p++;
-		while( *p && *p != '+' && *p != ',' && *p != ' ' && *p != '|' && n < sizeof( frag ) - 1 ) frag[n++] = *p++;
-		frag[n] = 0;
-
-		if( !n )
-			continue;
-
-		for( i = 0; i + n <= ln; i++ )
-		{
-			for( k = 0; k < n; k++ )
-			{
-				if( tolower( (unsigned char)label[i + k] ) != tolower( (unsigned char)frag[k] ))
-					break;
-			}
-
-			if( k == n && (int)( i + n ) > best )
-				best = (int)( i + n );
-		}
-	}
-
-	return best;
-}
-
-// ---- a thrown, burning flare: the game's own light for it needs its opengl32.dll, so we light it ourselves
-static int vr_thrown_ent;		// entity number of the thrown flare, 0 = looking for it
-static qboolean vr_thrown_on;
-static float vr_thrown_end;
-static vec3_t vr_thrown_pos;
-static int vr_thrown_known[96], vr_thrown_nknown;
-
-static cl_entity_t *VR_FlareEntities( int *iter )
-{
-	// walks the visible entities that look like flares (not the ones in your hand or on your body)
-	for( ; tr.draw_list && *iter < tr.draw_list->num_solid_entities + tr.draw_list->num_trans_entities; )
-	{
-		int n = *iter, ns = tr.draw_list->num_solid_entities;
-		cl_entity_t *e = n < ns ? tr.draw_list->solid_entities[n] : tr.draw_list->trans_entities[n - ns];
-
-		( *iter )++;
-
-		if( !e || !e->model || e->model->type != mod_studio || e == tr.viewent || e->player )
-			continue;
-
-		if( VR_ContainsNoCase( e->model->name, "flare" ) && !VR_ContainsNoCase( e->model->name, "/v_" ) && !VR_ContainsNoCase( e->model->name, "/p_" ))
-			return e;
-	}
-
-	return NULL;
-}
-
-static void VR_ThrownFlareStart( void )
-{
-	cl_entity_t *e;
-	int it = 0;
-
-	// remember the flares lying around now, the thrown one is the one that appears next
-	vr_thrown_nknown = 0;
-
-	while(( e = VR_FlareEntities( &it )) != NULL && vr_thrown_nknown < 96 )
-		vr_thrown_known[vr_thrown_nknown++] = e->index;
-
-	vr_thrown_ent = 0;
-	vr_thrown_on = true;
-	vr_thrown_end = vr_flare_end;
-	VectorCopy( vr.hand[1].pos, vr_thrown_pos );
-}
-
-static void VR_UpdateThrownFlare( const ref_viewpass_t *game )
-{
-	cl_entity_t *e;
-	dlight_t *dl;
-	int it = 0, i;
-
-	if( !vr_thrown_on )
-		return;
-
-	if( gp_cl->time > vr_thrown_end || gp_cl->time < vr_thrown_end - 200.0f )
-	{
-		vr_thrown_on = false;
-		return;
-	}
-
-	while(( e = VR_FlareEntities( &it )) != NULL )
-	{
-		vec3_t d;
-
-		if( vr_thrown_ent )
-		{
-			if( e->index == vr_thrown_ent )
-			{
-				VectorCopy( e->origin, vr_thrown_pos );
-				break;
-			}
-
-			continue;
-		}
-
-		for( i = 0; i < vr_thrown_nknown; i++ )
-		{
-			if( vr_thrown_known[i] == e->index )
-				break;
-		}
-
-		VectorSubtract( e->origin, game->vieworigin, d );
-
-		if( i == vr_thrown_nknown && VectorLength( d ) < 700.0f )
-		{
-			vr_thrown_ent = e->index;
-			VectorCopy( e->origin, vr_thrown_pos );
-			break;
-		}
-	}
-
-	if( !vr_thrown_ent )
-		return;	// not seen yet
-
-	if(( dl = VR_AllocLightKey( VR_LIGHT_KEY + 1 )) != NULL )
-	{
-		VectorCopy( vr_thrown_pos, dl->origin );
-		dl->origin[2] += 4.0f;
-		dl->radius = vr_omni_radius.value;
-		dl->color.r = 255;
-		dl->color.g = 70;
-		dl->color.b = 40;
-		dl->die = gp_cl->time + 0.05f;
-	}
-}
-
-// seconds a flare burns, by difficulty
-static float VR_FlareBurnTime( void )
-{
-	cvar_t *skill;
-	int level;
-
-	if( vr_flare_time.value > 0.0f )
-		return vr_flare_time.value;
-
-	skill = gEngfuncs.pfnGetCvarPointer( "skill" );
-	level = skill ? (int)( skill->value + 0.5f ) : 2;
-
-	switch( level )
-	{
-	case 1: return 120.0f;
-	case 3: return 60.0f;
-	case 4: return 30.0f;
-	default: return 90.0f;
-	}
-}
-
-// the game says which animation the weapon in hand plays, that tells us whether its light is on
-void VR_LightObserve( const char *label, float animtime )
-{
-	int on, off, tog;
-	qboolean changed, toggled = false;
-
-	if( !label || ( !vr_vm_light && !vr_vm_omni ))
-		return;
-
-	changed = Q_strcmp( label, vr_light_label ) != 0;
-	on = VR_LastMatchEnd( vr_light_on_seq.string, label );
-	off = VR_LastMatchEnd( vr_light_off_seq.string, label );
-	tog = vr_vm_light ? VR_LastMatchEnd( vr_light_toggle_seq.string, label ) : -1;
-
-	if( changed )
-	{
-		int prev = vr_light_state;
-
-		Q_strncpy( vr_light_label, label, sizeof( vr_light_label ));
-
-		// "sms_to_flash" holds both words: whichever comes last is where the animation ends up
-		if( off >= 0 && off >= on ) vr_light_state = 0;
-		else if( on >= 0 ) vr_light_state = 1;
-		else if( tog >= 0 && gp_cl->time > vr_equip_time + 0.6f )
-		{
-			vr_light_state = vr_light_state == 1 ? 0 : 1;
-			toggled = true;
-		}
-
-		if( vr_vm_flare && vr_light_state == 1 && prev != 1 && gp_cl->time >= vr_flare_end )
-			vr_flare_end = gp_cl->time + VR_FlareBurnTime();
-
-		// a lit flare that was thrown keeps burning where it lands
-		if( vr_vm_flare && prev == 1 && vr_light_state == 0 && gp_cl->time < vr_flare_end && VR_ContainsNoCase( label, "throw" ))
-			VR_ThrownFlareStart();
-
-		if( vr_light_debug.value )
-			gEngfuncs.Con_Printf( "VR light: animation '%s' -> light %s%s\n", label,
-				vr_light_state == 1 ? "ON" : vr_light_state == 0 ? "OFF" : "unknown",
-				toggled ? " (switched)" : "" );
-	}
-	else if( tog >= 0 && on < 0 && off < 0 && fabs( animtime - vr_light_last_anim ) > 0.2f && gp_cl->time > vr_toggle_time + 0.35f
-		&& gp_cl->time > vr_equip_time + 0.6f )
-	{
-		// the same switch animation started again
-		vr_light_state = vr_light_state == 1 ? 0 : 1;
-		toggled = true;
-
-		if( vr_light_debug.value )
-			gEngfuncs.Con_Printf( "VR light: '%s' played again -> light %s\n", label, vr_light_state == 1 ? "ON" : "OFF" );
-	}
-
-	if( toggled )
-		vr_toggle_time = gp_cl->time;
-
-	vr_light_last_anim = animtime;
-}
-
-static qboolean VR_LightActive( void )
-{
-	if( vr_vm_flare && vr_light_state == 1 && gp_cl->time > vr_flare_end )
-		return false;	// burnt out
-
-	// phones, flashlights and flares stay off until their animation says otherwise, a lantern stays on
-	return vr_light_state == 1 || ( vr_light_state < 0 && vr_vm_omni && !vr_vm_flare );
-}
-
-// the game makes its own lights at your body for these items, they are not where your hand is
-static void VR_KillBodyLights( const ref_viewpass_t *game )
-{
-	int i;
-
-	if( !vr_kill_body_light.value )
-		return;
-
-	for( i = 0; i < MAX_DLIGHTS; i++ )
-	{
-		vec3_t d;
-
-		if( gp_dlights[i].key == VR_LIGHT_KEY || gp_dlights[i].key == VR_LIGHT_KEY + 1 || gp_dlights[i].radius <= 0.0f || gp_dlights[i].die < gp_cl->time )
-			continue;
-
-		VectorSubtract( gp_dlights[i].origin, game->vieworigin, d );
-
-		if( VectorLength( d ) < 96.0f )
-		{
-			gp_dlights[i].radius = 0.0f;
-			gp_dlights[i].die = 0.0f;
-		}
-	}
-}
-
-// a spotlight pool where the hand points, lit with the engine's dynamic light so both eyes see it
+// ---- the held phone / flashlight / flare / lantern
+// The game (client.dll) makes its own light for these, but at your head. Here we only work out where
+// your hand puts it; gl_vr_cof.c moves the game's own light there before each picture is drawn.
 static void VR_UpdateHandLight( const ref_viewpass_t *game )
 {
-	vec3_t end, org, to;
-	dlight_t *dl;
-	float dist, bright;
-	qboolean hit;
-
-	{
-		// a new map starts the clock again: forget the old flare
-		static float last_time;
-
-		if( gp_cl->time < last_time - 1.0f )
-		{
-			vr_flare_end = 0.0f;
-			vr_thrown_on = false;
-		}
-
-		last_time = gp_cl->time;
-	}
+	vec3_t start, dir, side, up, end, spot;
 
 	if( !vr_phone_light.value || !vr.hand[1].valid || ( !vr_vm_light && !vr_vm_omni )
 		|| !tr.viewent || !tr.viewent->model || Q_strcmp( tr.viewent->model->name, vr_tune_model ))
-		return;
-
-	VR_KillBodyLights( game );
-
-	if( !VR_LightActive( ))
-		return;
-
-	if( vr_vm_omni )
 	{
-		// flare or lantern: light all around the hand
-		if( vr_pose_valid )
-		{
-			VectorMA( vr.hand[1].pos, vr_light_x.value, vr_pose_f, org );
-			VectorMA( org, vr_light_y.value, vr_pose_l, org );
-			VectorMA( org, vr_light_z.value, vr_pose_u, org );
-		}
-		else VectorMA( vr.hand[1].pos, vr_light_x.value, vr.hand[1].fwd, org );
-
-		if( !( dl = VR_AllocLight( )))
-			return;
-
-		VectorCopy( org, dl->origin );
-		dl->radius = vr_omni_radius.value;
-		dl->color.r = 255;
-		dl->color.g = vr_vm_flare ? 70 : 190;
-		dl->color.b = vr_vm_flare ? 40 : 110;
-		dl->die = gp_cl->time + 0.05f;
+		VR_CofSetHandLight( false, false, NULL, NULL, NULL );
 		return;
 	}
 
+	// the light can be moved (vr_light_x/y/z) and aimed away from where the controller points (vr_light_pitch / vr_light_yaw)
+	VectorCopy( vr.hand[1].fwd, dir );
+	VectorCopy( vr.hand[1].left, side );
+	VectorCopy( vr.hand[1].up, up );
+	VR_RotateAxis( dir, up, vr_light_yaw.value );
+	VR_RotateAxis( side, up, vr_light_yaw.value );
+	VR_RotateAxis( dir, side, vr_light_pitch.value );
+
+	if( vr_pose_valid )
 	{
-		// the spotlight can be aimed away from where the controller points (vr_light_pitch / vr_light_yaw)
-		vec3_t dir, side, up, start;
-
-		VectorCopy( vr.hand[1].fwd, dir );
-		VectorCopy( vr.hand[1].left, side );
-		VectorCopy( vr.hand[1].up, up );
-		VR_RotateAxis( dir, up, vr_light_yaw.value );
-		VR_RotateAxis( side, up, vr_light_yaw.value );
-		VR_RotateAxis( dir, side, vr_light_pitch.value );
-
+		VectorMA( vr.hand[1].pos, vr_light_x.value, vr_pose_f, start );
+		VectorMA( start, vr_light_y.value, vr_pose_l, start );
+		VectorMA( start, vr_light_z.value, vr_pose_u, start );
+	}
+	else
+	{
 		VectorMA( vr.hand[1].pos, vr_light_x.value, vr.hand[1].fwd, start );
 		VectorMA( start, vr_light_y.value, vr.hand[1].left, start );
 		VectorMA( start, vr_light_z.value, vr.hand[1].up, start );
-
-		hit = VR_TraceRay( start, dir, vr_light_distance.value, game->vieworigin, end );
-
-		// a little in front of the surface, so the light does not sit inside it
-		if( hit ) VectorMA( end, -8.0f, dir, org );
-		else VectorCopy( end, org );
-
-		VectorSubtract( org, start, to );
 	}
 
-	dist = VectorLength( to );
-	bright = vr_light_brightness.value / ( 1.0f + ( dist / 350.0f ) * ( dist / 350.0f ));
+	// where the beam lands, for the game's point lights that sit on the wall the beam hits
+	if( VR_TraceRay( start, dir, vr_light_distance.value, game->vieworigin, end ))
+		VectorMA( end, -8.0f, dir, spot );
+	else VectorCopy( end, spot );
 
-	if( !( dl = VR_AllocLight( )))
-		return;
-
-	VectorCopy( org, dl->origin );
-	dl->radius = vr_light_radius.value;
-	dl->color.r = (uint8_t)bound( 40.0f, bright, 255.0f );
-	dl->color.g = (uint8_t)bound( 40.0f, bright * 0.96f, 255.0f );
-	dl->color.b = (uint8_t)bound( 40.0f, bright * 0.85f, 255.0f );
-	dl->die = gp_cl->time + 0.05f;
+	VR_CofSetHandLight( true, vr_vm_omni, start, dir, spot );
 }
 
 /*
@@ -2542,7 +2202,6 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 	VR_ReloadTick();
 	VR_HideCrosshair();
 	VR_UpdateHandLight( game );
-	VR_UpdateThrownFlare( game );
 	VR_PublishUI();
 
 	return true;
@@ -2579,6 +2238,16 @@ qboolean VR_GetEyeTarget( GLuint *fbo, int *width, int *height )
 		return false;
 
 	if( fbo ) *fbo = vr.eye_fbo[vr.cur_eye & 1];
+	if( width ) *width = vr.eye_w;
+	if( height ) *height = vr.eye_h;
+	return true;
+}
+
+qboolean VR_GetPassSize( int *width, int *height )
+{
+	if( !vr.in_eye_pass || vr.eye_w <= 0 || vr.eye_h <= 0 )
+		return false;
+
 	if( width ) *width = vr.eye_w;
 	if( height ) *height = vr.eye_h;
 	return true;

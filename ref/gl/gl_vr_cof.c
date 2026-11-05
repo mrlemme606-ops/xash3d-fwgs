@@ -40,6 +40,7 @@ static CVAR_DEFINE_AUTO( vr_cof_rearm, "1", FCVAR_ARCHIVE, "1 = give the game's 
 static CVAR_DEFINE_AUTO( vr_cof_frustum, "1", FCVAR_ARCHIVE, "1 = replace the client.dll culling frustum with the real eye frustum (stops surfaces at the edge of the view being skipped)" );
 static CVAR_DEFINE_AUTO( vr_cof_eyeorigin, "1", FCVAR_ARCHIVE, "1 = centre the client.dll sky on the eye being drawn instead of the game's view origin" );
 static CVAR_DEFINE_AUTO( vr_cof_depth, "0.8", 0, "far end of the depth range the world is drawn in while the game's client.dll is attached (it keeps 0.8 to 1.0 for its sky). 1 = off" );
+static CVAR_DEFINE_AUTO( vr_cof_watersize, "1", FCVAR_ARCHIVE, "1 = tell the game's water effect the size of the eye picture (it copies the screen from the bottom left corner at the window size). Experimental" );
 static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepass while the client.dll re-arm is working (normally not needed)" );
 
 #if defined( _WIN32 )
@@ -58,6 +59,10 @@ static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepas
 #define COF_SKYCOUNT		0x104CE078u	// number of sky entities waiting to be drawn
 #define COF_VIEWORG		0x105595CCu	// float[3] view origin used by the sky and glows
 #define COF_FRUSTUM		0x104CDDD8u	// 4 * mplane_t (20 bytes each)
+#define COF_DLIGHTS		0x104CC550u	// 32 lights of 31 floats (sub_1005C0F0)
+#define COF_DLIGHT_KEY		0x104CC574u
+#define COF_FN_DLIGHTALLOC	0x1005C0F0u
+#define COF_SCREENSZ		0x1018F430u	// int width, height the water effect copies from the screen
 
 static struct
 {
@@ -70,6 +75,11 @@ static struct
 	volatile int	*arm, *inner, *skydone, *skycount;
 	float		*vieworg;
 	mplane_t	*frustum;
+	float		*dlights;	// 32 * 31 floats
+	int		*scrsize;
+	int		s_scr[2];
+	qboolean	scr_ok;
+	qboolean	lights_ok;
 
 	qboolean	in_frame;
 	int		s_arm, s_inner, s_skydone, s_skycount;
@@ -225,6 +235,16 @@ static void COF_Resolve( void )
 		return;
 	}
 
+	{
+		static const unsigned dl_vars[] = { COF_DLIGHTS, COF_DLIGHT_KEY };
+
+		cof.dlights = (float *)( base + COF_RVA( COF_DLIGHTS ));
+		cof.lights_ok = COF_CodeRefs( base, COF_FN_DLIGHTALLOC, 0x90, dl_vars, 2 ) && COF_Readable( cof.dlights, 32 * 31 * 4, true );
+	}
+
+	cof.scrsize = (int *)( base + COF_RVA( COF_SCREENSZ ));
+	cof.scr_ok = COF_Readable( cof.scrsize, 8, true );
+
 	cof.ok = true;
 	Q_strncpy( cof.why, "ok", sizeof( cof.why ));
 	gEngfuncs.Con_Printf( "VR: client.dll renderer found at %p, per-eye re-arm is available (vr_cof_status)\n", (void *)base );
@@ -234,6 +254,87 @@ qboolean VR_CofActive( void )
 {
 	COF_Resolve();
 	return cof.ok && vr_cof_rearm.value != 0.0f;
+}
+
+static struct
+{
+	qboolean	valid, omni;
+	vec3_t		start, dir, spot;
+} hl;
+
+void VR_CofSetHandLight( qboolean valid, qboolean omni, const float *start, const float *dir, const float *spot )
+{
+	hl.valid = valid && start && dir && spot;
+	hl.omni = omni;
+
+	if( hl.valid )
+	{
+		VectorCopy( start, hl.start );
+		VectorCopy( dir, hl.dir );
+		VectorCopy( spot, hl.spot );
+	}
+}
+
+// The game makes its own lights for a held phone, flashlight, flare or lantern (sub_10065260): a spotlight with a
+// texture (flashlight2.tga) and small point lights, all at the player's body. Each is an entry in the DLL's
+// light array (31 floats: origin 0-2, color 4-5, radius 3, ratio 6, die time 7, key 9, angles 10-12,
+// texture name at byte 60). Move them to the hand, and aim the spotlight where the hand points.
+static void COF_Relight( void )
+{
+	int i;
+	float now = gp_cl ? (float)gp_cl->time : 0.0f;
+
+	if( !cof.lights_ok || !hl.valid )
+		return;
+
+	for( i = 0; i < 32; i++ )
+	{
+		float *l = cof.dlights + i * 31;
+		const char *tex = (const char *)( l + 15 );
+		qboolean spot = Q_stristr( tex, "flashlight2" ) != NULL;
+
+		if( l[7] < now || l[3] <= 0.0f )
+			continue;
+
+		if( spot )
+		{
+			VectorCopy( hl.start, l );
+			l[10] = -asin( bound( -1.0f, hl.dir[2], 1.0f )) * ( 180.0f / M_PI_F );	// pitch, positive looks down
+			l[11] = atan2( hl.dir[1], hl.dir[0] ) * ( 180.0f / M_PI_F );
+			l[12] = 0.0f;
+		}
+		else if( !tex[0] && l[3] == 60.0f )	// the player's small point lights
+		{
+			VectorCopy( hl.omni ? hl.start : hl.spot, l );
+		}
+	}
+}
+
+static void VR_CofLightDump_f( void )
+{
+	int i, n = 0;
+	float now = gp_cl ? (float)gp_cl->time : 0.0f;
+
+	COF_Resolve();
+
+	if( !cof.ok || !cof.lights_ok )
+	{
+		gEngfuncs.Con_Printf( "light array not available\n" );
+		return;
+	}
+
+	for( i = 0; i < 32; i++ )
+	{
+		const float *l = cof.dlights + i * 31;
+
+		if( l[7] < now || l[3] <= 0.0f )
+			continue;
+
+		n++;
+		gEngfuncs.Con_Printf( "light %d: origin %.0f %.0f %.0f radius %.0f ratio %.2f angles %.0f %.0f texture '%s'\n", i, l[0], l[1], l[2], l[3], l[6], l[10], l[11], (const char *)( l + 15 ));
+	}
+
+	gEngfuncs.Con_Printf( "%d active lights, hand light %s\n", n, hl.valid ? ( hl.omni ? "omni" : "spot" ) : "none" );
 }
 
 // once per game frame, before the first picture. client.dll has run its frame start by now.
@@ -256,6 +357,11 @@ void VR_CofBeginFrame( void )
 	cof.s_skydone = *cof.skydone;
 	cof.s_skycount = *cof.skycount;
 	memcpy( cof.s_org, cof.vieworg, sizeof( cof.s_org ));
+	if( cof.scr_ok )
+	{
+		cof.s_scr[0] = cof.scrsize[0];
+		cof.s_scr[1] = cof.scrsize[1];
+	}
 
 	cof.in_frame = true;
 	cof.frames++;
@@ -281,6 +387,20 @@ void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin )
 	if( vr_cof_frustum.value != 0.0f && planes )
 		memcpy( cof.frustum, planes, sizeof( mplane_t ) * 4 );	// left, right, bottom, top: the engine and the DLL both use inward normals
 
+	COF_Relight();
+
+	// the water effect copies the screen from the bottom left corner, at this size
+	if( cof.scr_ok && vr_cof_watersize.value != 0.0f && cof.s_scr[0] > 0 && cof.s_scr[1] > 0 )
+	{
+		int w, h;
+
+		if( VR_GetPassSize( &w, &h ))
+		{
+			cof.scrsize[0] = Q_min( w, cof.s_scr[0] );
+			cof.scrsize[1] = Q_min( h, cof.s_scr[1] );
+		}
+	}
+
 	cof.last_pass_arm = *cof.arm;
 	cof.last_pass_inner = *cof.inner;
 	cof.passes++;
@@ -295,6 +415,12 @@ void VR_CofEndFrame( void )
 {
 	if( cof.in_frame && cof.ok && vr_cof_eyeorigin.value != 0.0f )
 		memcpy( cof.vieworg, cof.s_org, sizeof( cof.s_org ));
+
+	if( cof.in_frame && cof.scr_ok && cof.s_scr[0] > 0 )
+	{
+		cof.scrsize[0] = cof.s_scr[0];
+		cof.scrsize[1] = cof.s_scr[1];
+	}
 
 	cof.in_frame = false;
 }
@@ -329,11 +455,14 @@ void VR_CofBeginFrame( void ) { }
 qboolean VR_CofFrameArmed( void ) { return false; }
 void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin ) { }
 void VR_CofEndFrame( void ) { }
+void VR_CofSetHandLight( qboolean valid, qboolean omni, const float *start, const float *dir, const float *spot ) { }
 
 static void VR_CofStatus_f( void )
 {
 	gEngfuncs.Con_Printf( "client.dll renderer hook: Windows only\n" );
 }
+
+static void VR_CofLightDump_f( void ) { }
 
 #endif
 
@@ -366,6 +495,8 @@ void VR_CofInitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_frustum );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_eyeorigin );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_prepass );
+	gEngfuncs.Cvar_RegisterVariable( &vr_cof_watersize );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_depth );
+	gEngfuncs.Cmd_AddCommand( "vr_light_dump", VR_CofLightDump_f, "list the game's active lights (to tune phone / flashlight / flare / lantern lights)" );
 	gEngfuncs.Cmd_AddCommand( "vr_cof_status", VR_CofStatus_f, "show whether the game's client.dll renderer is being kept in step with the VR eyes" );
 }

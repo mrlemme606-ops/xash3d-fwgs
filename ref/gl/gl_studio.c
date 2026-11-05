@@ -3809,7 +3809,6 @@ void R_DrawViewModel( void )
 				mstudioseqdesc_t *osd = (mstudioseqdesc_t *)((byte *)ohdr + ohdr->seqindex) + view->curstate.sequence;
 
 				VR_ReloadObserve( osd->label, view->curstate.animtime );
-				VR_LightObserve( osd->label, view->curstate.animtime );
 			}
 		}
 	}

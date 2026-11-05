@@ -23,13 +23,7 @@ key presses and the mouse cursor for menus.
 
 // published by the renderer each frame, not meant to be set by hand
 static CVAR_DEFINE_AUTO( vr_in_active, "0", 0, "(internal) VR controllers are active" );
-static CVAR_DEFINE_AUTO( vr_ui_debug, "0", 0, "1 = print what screen is open and what commands the game sends (to find out what the computer screen is)" );
 static CVAR_DEFINE_AUTO( vr_sound_debug, "0", 0, "1 = print the names of the sounds your own character makes (to mute the extra footstep)" );
-static CVAR_DEFINE_AUTO( vr_keyboard_cmd, "", FCVAR_ARCHIVE, "the SteamVR keyboard opens when the game sends a command containing one of these parts (separated by +). See vr_ui_debug" );
-static CVAR_DEFINE_AUTO( vr_keyboard_close_cmd, "", FCVAR_ARCHIVE, "the keyboard closes when the game sends a command containing one of these parts (separated by +)" );
-static CVAR_DEFINE_AUTO( vr_keyboard_computer_map, "c_start2", FCVAR_ARCHIVE, "map where the computer log-on screen is. The SteamVR keyboard opens there when keyboard_type.wav plays and closes on computer_logon.wav or the stopcomputer command. Empty = off" );
-static CVAR_DEFINE_AUTO( vr_keyboard_auto, "1", FCVAR_ARCHIVE, "1 = the SteamVR keyboard opens by itself when a screen with a mouse cursor opens in one of the maps in vr_keyboard_maps (the computer)" );
-static CVAR_DEFINE_AUTO( vr_keyboard_maps, "", FCVAR_ARCHIVE, "map names (parts, separated by +) where vr_keyboard_auto works. Empty = every map" );
 static CVAR_DEFINE_AUTO( vr_in_kbd, "0", 0, "(internal) the keyboard should be open" );
 static CVAR_DEFINE_AUTO( vr_in_kbd_chars, "", 0, "(internal) typed characters waiting to be sent to the game" );
 static CVAR_DEFINE_AUTO( vr_in_kbd_closed, "0", 0, "(internal) the player closed the keyboard" );
@@ -83,7 +77,8 @@ static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
 static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = body (mouse), 1 = head, 2 = right hand while you use/shoot and head otherwise (default), 3 = right hand always" );
 static CVAR_DEFINE_AUTO( vr_move_digital_ents, "", FCVAR_ARCHIVE, "names of entities (as vr_debug_move shows them, like *16) that always count as a boat or train to stand on" );
-static CVAR_DEFINE_AUTO( vr_move_digital, "1", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
+static CVAR_DEFINE_AUTO( vr_move_gain, "1.25", FCVAR_ARCHIVE, "how much the left stick is amplified (1 = as is). The stick rarely reaches its full value, so walking felt slower than the keyboard" );
+static CVAR_DEFINE_AUTO( vr_move_digital, "0", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
 static CVAR_DEFINE_AUTO( vr_use_aim, "2", FCVAR_ARCHIVE, "what the use key (right grip) aims along: 0 = your head, 1 = the exact point your hand ray hits, 2 = the direction your hand points" );
 static CVAR_DEFINE_AUTO( vr_melee_enable, "1", FCVAR_ARCHIVE, "1 = swinging your hand fast with a melee weapon attacks" );
 static CVAR_DEFINE_AUTO( vr_melee_speed, "2.0", FCVAR_ARCHIVE, "hand speed in m/s that counts as a swing" );
@@ -209,28 +204,6 @@ static void IN_VRKeyboard_f( void )
 	kbd_dismissed = false;
 }
 
-static qboolean IN_VRKeyboardMap( void )
-{
-	const char *p = vr_keyboard_maps.string;
-
-	if( !*p )
-		return true;
-
-	while( *p )
-	{
-		char tok[48];
-		int n = 0;
-
-		while( *p == '+' || *p == ' ' ) p++;
-		while( *p && *p != '+' && n < 47 ) tok[n++] = *p++;
-		tok[n] = 0;
-
-		if( n && Q_stristr( clgame.mapname, tok ))
-			return true;
-	}
-
-	return false;
-}
 
 static void IN_VRTypeChar( int ch )
 {
@@ -277,31 +250,15 @@ static qboolean IN_VRNameInList( const char *list, const char *name )
 	return false;
 }
 
-// the computer log-on screen (c_start2): keyboard_type.wav plays when the screen opens and while typing,
-// so only the first one after the screen was last closed counts
-static qboolean kbd_comp_armed = true;
-static char kbd_comp_lastmap[64];
+// The computer log-on screen is a panel of the game's client.dll. The server opens it with the user message
+// "Computer", and closing it makes the game send the command "stopcomputer". That is all we need to know.
+static qboolean kbd_comp_open;
 
-static qboolean IN_VRComputerMap( void )
+void IN_VRUserMsg( const char *name )
 {
-	return vr_keyboard_computer_map.string[0] && Q_stristr( clgame.mapname, vr_keyboard_computer_map.string );
-}
-
-void IN_VRSound( const char *name )
-{
-	if( !name || !IN_VRComputerMap( ))
-		return;
-
-	if( vr_ui_debug.value && ( Q_stristr( name, "keyboard_type" ) || Q_stristr( name, "computer_logon" )))
-		Con_Printf( "VR ui: computer sound '%s' (keyboard armed %d)\n", name, kbd_comp_armed );
-
-	if( Q_stristr( name, "computer_logon" ))
+	if( name && !Q_strcmp( name, "Computer" ) && !kbd_comp_open )
 	{
-		kbd_cmd_open = false;
-	}
-	else if( kbd_comp_armed && Q_stristr( name, "keyboard_type" ))
-	{
-		kbd_comp_armed = false;
+		kbd_comp_open = true;
 		kbd_dismissed = false;
 		kbd_cmd_open = true;
 	}
@@ -310,19 +267,12 @@ void IN_VRSound( const char *name )
 // every command the game's client sends (from cl_game.c)
 void IN_VRClientCmd( const char *cmd )
 {
-	if( IN_VRComputerMap() && !Q_strnicmp( cmd, "stopcomputer", 12 ))
+	if( !Q_strnicmp( cmd, "stopcomputer", 12 ))
 	{
+		kbd_comp_open = false;
 		kbd_cmd_open = false;
-		kbd_comp_armed = true;
+		kbd_dismissed = false;
 	}
-
-	if( vr_ui_debug.value )
-		Con_Printf( "VR ui: the game sends the command '%s'\n", cmd );
-
-	if( vr_keyboard_cmd.string[0] && IN_VRNameInList( vr_keyboard_cmd.string, cmd ))
-		kbd_cmd_open = true;
-	else if( vr_keyboard_close_cmd.string[0] && IN_VRNameInList( vr_keyboard_close_cmd.string, cmd ))
-		kbd_cmd_open = false;
 }
 
 void IN_VRInit( void )
@@ -330,13 +280,7 @@ void IN_VRInit( void )
 	int i;
 
 	Cvar_RegisterVariable( &vr_in_active );
-	Cvar_RegisterVariable( &vr_ui_debug );
 	Cvar_RegisterVariable( &vr_sound_debug );
-	Cvar_RegisterVariable( &vr_keyboard_cmd );
-	Cvar_RegisterVariable( &vr_keyboard_close_cmd );
-	Cvar_RegisterVariable( &vr_keyboard_computer_map );
-	Cvar_RegisterVariable( &vr_keyboard_auto );
-	Cvar_RegisterVariable( &vr_keyboard_maps );
 	Cvar_RegisterVariable( &vr_in_kbd );
 	Cvar_RegisterVariable( &vr_in_kbd_chars );
 	Cvar_RegisterVariable( &vr_in_kbd_closed );
@@ -392,6 +336,7 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_snap_angle );
 	Cvar_RegisterVariable( &vr_smooth_speed );
 	Cvar_RegisterVariable( &vr_aim_mode );
+	Cvar_RegisterVariable( &vr_move_gain );
 	Cvar_RegisterVariable( &vr_move_digital );
 	Cvar_RegisterVariable( &vr_move_digital_ents );
 	Cvar_RegisterVariable( &vr_debug_move );
@@ -543,24 +488,15 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		if( !ui_open && cls.key_dest == key_game )
 			kbd_manual = false;
 
-		if( vr_ui_debug.value )
 		{
-			static int last_mouse = -1, last_dest = -1;
+			// a new map: nothing of the old one stays open
+			static char kbd_map[64];
 
-			if( last_mouse != host.mouse_visible || last_dest != cls.key_dest )
+			if( Q_stricmp( kbd_map, clgame.mapname ))
 			{
-				Con_Printf( "VR ui: mouse cursor %s, key_dest %d, map %s\n", host.mouse_visible ? "shown" : "hidden", (int)cls.key_dest, clgame.mapname );
-				last_mouse = host.mouse_visible;
-				last_dest = cls.key_dest;
+				Q_strncpy( kbd_map, clgame.mapname, sizeof( kbd_map ));
+				kbd_comp_open = kbd_cmd_open = false;
 			}
-		}
-
-
-		if( Q_stricmp( kbd_comp_lastmap, clgame.mapname ))
-		{
-			Q_strncpy( kbd_comp_lastmap, clgame.mapname, sizeof( kbd_comp_lastmap ));
-			kbd_comp_armed = true;
-			kbd_cmd_open = false;
 		}
 
 		if( vr_in_kbd_closed.value )
@@ -574,7 +510,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		if( !ui_open && !kbd_manual )
 			kbd_dismissed = false;
 
-		want = !kbd_dismissed && ( kbd_manual || kbd_cmd_open || ( ui_open && vr_keyboard_auto.value && vr_keyboard_maps.string[0] && IN_VRKeyboardMap( )));
+		want = !kbd_dismissed && ( kbd_manual || kbd_cmd_open );
 
 		if(( vr_in_kbd.value >= 0.5f ) != want )
 			Cvar_DirectSetValue( &vr_in_kbd, want ? 1.0f : 0.0f );
@@ -841,6 +777,30 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		}
 	}
 
+	// anything we did not recognise (a ladder or boat of the game's own, a lift): you push the stick and nothing moves,
+	// so for a while the movement keys are pressed instead
+	if( clgame.pmove && in_game )
+	{
+		static double stuck_since, force_until;
+		float push = sqrt( fwd * fwd + side * side );
+		float speed = VectorLength( clgame.pmove->velocity );
+
+		if( push > 0.6f && speed < 15.0f && !on_ladder && !on_boat )
+		{
+			if( stuck_since == 0.0 )
+				stuck_since = host.realtime;
+			else if( host.realtime - stuck_since > 0.45 )
+				force_until = host.realtime + 2.0;
+		}
+		else
+		{
+			stuck_since = 0.0;
+		}
+
+		if( host.realtime < force_until )
+			on_boat = true;
+	}
+
 	// vr_move_digital 0 is the normal analog walking, but ladders and boats need the keys: switch for as long as you are on one
 	digital = ( vr_move_digital.value || on_ladder || on_boat ) && ( on_ladder || on_boat || fabs( rot ) < 15.0f );
 
@@ -941,6 +901,17 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	// analog walking, when the keys are not doing it
 	if( !digital )
 	{
+		// the stick hardly ever reaches its full value: amplify it, so walking is as fast as with the keyboard
+		float m = sqrt( fwd * fwd + side * side ), gain = vr_move_gain.value;
+
+		if( m > 0.01f && gain > 0.0f )
+		{
+			float k = Q_min( m * gain, 1.0f ) / m;
+
+			fwd *= k;
+			side *= k;
+		}
+
 		cmd->forwardmove += fwd * Cvar_VariableValue( "cl_forwardspeed" );
 		cmd->sidemove += side * Cvar_VariableValue( "cl_sidespeed" );
 

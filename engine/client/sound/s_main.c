@@ -640,8 +640,6 @@ static qboolean S_VRNameInList( const char *list, const char *name )
 	return false;
 }
 
-extern void IN_VRSound( const char *name );
-
 static qboolean S_VRMuted( int ent, int chan, const sfx_t *sfx )
 {
 	static convar_t *on, *list, *own, *quiet, *steps;
@@ -712,7 +710,6 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
 	sfx = S_GetSfxByHandle( handle );
 	if( !sfx ) return;
 
-	IN_VRSound( sfx->name );
 	if( S_VRMuted( ent, chan, sfx )) return;
 
 	vol = bound( 0, fvol * 255, 255 );
