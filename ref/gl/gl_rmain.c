@@ -324,7 +324,7 @@ static void R_Clear( int bitMask )
 	else
 	{
 		gldepthmin = 0.0f;
-		gldepthmax = 1.0f;
+		gldepthmax = VR_CofDepthMax();
 	}
 
 	pglDepthFunc( GL_LEQUAL );

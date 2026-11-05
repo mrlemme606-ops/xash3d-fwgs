@@ -640,6 +640,8 @@ static qboolean S_VRNameInList( const char *list, const char *name )
 	return false;
 }
 
+extern void IN_VRSound( const char *name );
+
 static qboolean S_VRMuted( int ent, int chan, const sfx_t *sfx )
 {
 	static convar_t *on, *list, *own, *quiet, *steps;
@@ -659,7 +661,7 @@ static qboolean S_VRMuted( int ent, int chan, const sfx_t *sfx )
 	if( !steps ) steps = Cvar_FindVar( "vr_quiet_steps" );
 
 	if( quiet && steps && quiet->value >= 0.5f && ( ent == cl.playernum + 1 || ent == cl.viewentity )
-		&& S_VRNameInList( steps->string, sfx->name ))
+		&& ( S_VRNameInList( steps->string, sfx->name ) || Q_stristr( sfx->name, "bag_movement" )))
 		return true;
 
 	if( !on ) on = Cvar_FindVar( "vr_rl_mute_on" );
@@ -710,6 +712,7 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
 	sfx = S_GetSfxByHandle( handle );
 	if( !sfx ) return;
 
+	IN_VRSound( sfx->name );
 	if( S_VRMuted( ent, chan, sfx )) return;
 
 	vol = bound( 0, fvol * 255, 255 );

@@ -21,6 +21,7 @@ void VR_CofInitCvars( void );
 qboolean VR_CofActive( void );		// client.dll found, checked and the re-arm is switched on
 qboolean VR_CofFrameArmed( void );	// this frame's eye passes are being re-armed
 qboolean VR_CofKeepPrepass( void );
+float VR_CofDepthMax( void );
 void VR_CofBeginFrame( void );
 void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin );
 void VR_CofEndFrame( void );

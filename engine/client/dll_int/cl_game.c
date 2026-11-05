@@ -1817,7 +1817,7 @@ static int GAME_EXPORT pfnServerCmd( const char *szCmdString )
 			{
 				char command[32];
 
-				Q_snprintf( command, sizeof( command ), "save cofsave%c\n", *slot );
+				Q_snprintf( command, sizeof( command ), "cof_tape_save %c\n", *slot );
 				Cbuf_AddText( command );
 				return 1;
 			}

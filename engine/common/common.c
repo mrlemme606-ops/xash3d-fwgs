@@ -602,6 +602,64 @@ void COM_HexConvert( const char *pszInput, int nInputLength, byte *pOutput )
 
 /*
 =============
+COM_ZeroSpreadTable
+
+Cry of Fear keeps weapon inaccuracy in spread_settings.txt (minspread, maxspread, expand, speed and
+jump per weapon). With cof_zero_spread 1 the server DLL is handed a copy where all of those are 0,
+so a shot goes exactly where the weapon points, standing, crouching, moving or jumping.
+The text is changed in place; a shorter number is padded with spaces.
+=============
+*/
+static void COM_ZeroSpreadTable( byte *data, int length )
+{
+	static const char *keys[] = { "minspread", "maxspread", "expand", "speed", "jump" };
+	int i = 0;
+
+	while( i < length )
+	{
+		int start, len, k;
+
+		if( data[i] == '/' && i + 1 < length && data[i + 1] == '/' )
+		{
+			while( i < length && data[i] != '\n' ) i++;
+			continue;
+		}
+
+		if( data[i] <= ' ' || data[i] == '"' || data[i] == '{' || data[i] == '}' )
+		{
+			i++;
+			continue;
+		}
+
+		start = i;
+		while( i < length && data[i] > ' ' && data[i] != '"' && data[i] != '{' && data[i] != '}' ) i++;
+		len = i - start;
+
+		for( k = 0; k < (int)ARRAYSIZE( keys ); k++ )
+		{
+			int n = (int)Q_strlen( keys[k] );
+
+			if( len != n || Q_strnicmp((const char *)data + start, keys[k], n ))
+				continue;
+
+			// the value is the next token
+			while( i < length && ( data[i] <= ' ' || data[i] == '"' )) i++;
+			if( i < length && data[i] != '{' && data[i] != '}' )
+			{
+				int vs = i;
+
+				while( i < length && data[i] > ' ' && data[i] != '"' ) i++;
+				data[vs] = '0';
+				for( vs++; vs < i; vs++ )
+					data[vs] = ' ';
+			}
+			break;
+		}
+	}
+}
+
+/*
+=============
 COM_LoadFileForMe
 
 =============
@@ -622,6 +680,9 @@ byte *GAME_EXPORT COM_LoadFileForMe( const char *filename, int *pLength )
 	fs_offset_t iLength;
 	byte *pfile = g_fsapi.LoadFileMalloc( name, &iLength, false );
 	if( pLength ) *pLength = (int)iLength;
+
+	if( pfile && iLength > 0 && !Q_stricmp( name, "spread_settings.txt" ) && Cvar_VariableInteger( "cof_zero_spread" ))
+		COM_ZeroSpreadTable( pfile, (int)iLength );
 
 	return pfile;
 }

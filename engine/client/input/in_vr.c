@@ -27,6 +27,7 @@ static CVAR_DEFINE_AUTO( vr_ui_debug, "0", 0, "1 = print what screen is open and
 static CVAR_DEFINE_AUTO( vr_sound_debug, "0", 0, "1 = print the names of the sounds your own character makes (to mute the extra footstep)" );
 static CVAR_DEFINE_AUTO( vr_keyboard_cmd, "", FCVAR_ARCHIVE, "the SteamVR keyboard opens when the game sends a command containing one of these parts (separated by +). See vr_ui_debug" );
 static CVAR_DEFINE_AUTO( vr_keyboard_close_cmd, "", FCVAR_ARCHIVE, "the keyboard closes when the game sends a command containing one of these parts (separated by +)" );
+static CVAR_DEFINE_AUTO( vr_keyboard_computer_map, "c_start2", FCVAR_ARCHIVE, "map where the computer log-on screen is. The SteamVR keyboard opens there when keyboard_type.wav plays and closes on computer_logon.wav or the stopcomputer command. Empty = off" );
 static CVAR_DEFINE_AUTO( vr_keyboard_auto, "1", FCVAR_ARCHIVE, "1 = the SteamVR keyboard opens by itself when a screen with a mouse cursor opens in one of the maps in vr_keyboard_maps (the computer)" );
 static CVAR_DEFINE_AUTO( vr_keyboard_maps, "", FCVAR_ARCHIVE, "map names (parts, separated by +) where vr_keyboard_auto works. Empty = every map" );
 static CVAR_DEFINE_AUTO( vr_in_kbd, "0", 0, "(internal) the keyboard should be open" );
@@ -276,9 +277,45 @@ static qboolean IN_VRNameInList( const char *list, const char *name )
 	return false;
 }
 
+// the computer log-on screen (c_start2): keyboard_type.wav plays when the screen opens and while typing,
+// so only the first one after the screen was last closed counts
+static qboolean kbd_comp_armed = true;
+static char kbd_comp_lastmap[64];
+
+static qboolean IN_VRComputerMap( void )
+{
+	return vr_keyboard_computer_map.string[0] && Q_stristr( clgame.mapname, vr_keyboard_computer_map.string );
+}
+
+void IN_VRSound( const char *name )
+{
+	if( !name || !IN_VRComputerMap( ))
+		return;
+
+	if( vr_ui_debug.value && ( Q_stristr( name, "keyboard_type" ) || Q_stristr( name, "computer_logon" )))
+		Con_Printf( "VR ui: computer sound '%s' (keyboard armed %d)\n", name, kbd_comp_armed );
+
+	if( Q_stristr( name, "computer_logon" ))
+	{
+		kbd_cmd_open = false;
+	}
+	else if( kbd_comp_armed && Q_stristr( name, "keyboard_type" ))
+	{
+		kbd_comp_armed = false;
+		kbd_dismissed = false;
+		kbd_cmd_open = true;
+	}
+}
+
 // every command the game's client sends (from cl_game.c)
 void IN_VRClientCmd( const char *cmd )
 {
+	if( IN_VRComputerMap() && !Q_strnicmp( cmd, "stopcomputer", 12 ))
+	{
+		kbd_cmd_open = false;
+		kbd_comp_armed = true;
+	}
+
 	if( vr_ui_debug.value )
 		Con_Printf( "VR ui: the game sends the command '%s'\n", cmd );
 
@@ -297,6 +334,7 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_sound_debug );
 	Cvar_RegisterVariable( &vr_keyboard_cmd );
 	Cvar_RegisterVariable( &vr_keyboard_close_cmd );
+	Cvar_RegisterVariable( &vr_keyboard_computer_map );
 	Cvar_RegisterVariable( &vr_keyboard_auto );
 	Cvar_RegisterVariable( &vr_keyboard_maps );
 	Cvar_RegisterVariable( &vr_in_kbd );
@@ -517,6 +555,13 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			}
 		}
 
+
+		if( Q_stricmp( kbd_comp_lastmap, clgame.mapname ))
+		{
+			Q_strncpy( kbd_comp_lastmap, clgame.mapname, sizeof( kbd_comp_lastmap ));
+			kbd_comp_armed = true;
+			kbd_cmd_open = false;
+		}
 
 		if( vr_in_kbd_closed.value )
 		{

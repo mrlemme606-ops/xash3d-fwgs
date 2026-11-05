@@ -422,22 +422,19 @@ SV_Save_f
 
 ==============
 */
+static CVAR_DEFINE_AUTO( cof_zero_spread, "1", FCVAR_ARCHIVE, "1 = Cry of Fear weapons have no spread: every shot goes exactly where the weapon points" );
 static CVAR_DEFINE_AUTO( cof_menu_save, "0", FCVAR_ARCHIVE, "1 = allow saving from the menu or console in Cry of Fear (normally only the tape recorders save)" );
 
 static void SV_Save_f( void )
 {
 	qboolean ret = false;
 
-	// Cry of Fear: you can only save at the tape recorders, which ask for "cofsave1" .. "cofsave5"
+	// Cry of Fear: the menu and console may never save. Only the tape recorders can,
+	// and they use cof_tape_save (see below), so every name is refused here, including existing cofsave slots.
 	if( GI && !Q_stricmp( GI->gamefolder, "cryoffear" ) && !cof_menu_save.value )
 	{
-		const char *name = Cmd_Argc() > 1 ? Cmd_Argv( 1 ) : "";
-
-		if( Q_strnicmp( name, "cofsave", 7 ) && Q_stricmp( name, "autosave" ))
-		{
-			Con_Printf( "You can only save at a tape recorder.\n" );
-			return;
-		}
+		Con_Printf( "You can only save at a tape recorder.\n" );
+		return;
 	}
 
 	switch( Cmd_Argc( ))
@@ -455,6 +452,27 @@ static void SV_Save_f( void )
 
 	if( ret && CL_Active() && !FBitSet( host.features, ENGINE_QUAKE_COMPATIBLE ))
 		CL_HudMessage( "GAMESAVED" ); // defined in titles.txt
+}
+
+/*
+==============
+SV_CofTapeSave_f
+
+Only called by the engine itself when the tape recorder asks for a save ("savehack cofsaveN").
+==============
+*/
+static void SV_CofTapeSave_f( void )
+{
+	char name[16];
+	const char *arg = Cmd_Argc() > 1 ? Cmd_Argv( 1 ) : "";
+
+	if( !GI || Q_stricmp( GI->gamefolder, "cryoffear" ) || arg[0] < '1' || arg[0] > '5' || arg[1] )
+		return;
+
+	Q_snprintf( name, sizeof( name ), "cofsave%c", arg[0] );
+
+	if( SV_SaveGame( name ) && CL_Active() && !FBitSet( host.features, ENGINE_QUAKE_COMPATIBLE ))
+		CL_HudMessage( "GAMESAVED" );
 }
 
 /*
@@ -1345,7 +1363,9 @@ void SV_InitOperatorCommands( void )
 	if( host.type == HOST_NORMAL )
 	{
 		Cvar_RegisterVariable( &cof_menu_save );
+		Cvar_RegisterVariable( &cof_zero_spread );
 		Cmd_AddCommand( "save", SV_Save_f, "save the game to a file" );
+		Cmd_AddCommand( "cof_tape_save", SV_CofTapeSave_f, "internal: tape recorder save for Cry of Fear" );
 		Cmd_AddCommand( "savequick", SV_QuickSave_f, "save the game to the quicksave" );
 		Cmd_AddCommand( "autosave", SV_AutoSave_f, "save the game to 'autosave' file" );
 	}
@@ -1388,6 +1408,7 @@ void SV_KillOperatorCommands( void )
 	if( host.type == HOST_NORMAL )
 	{
 		Cmd_RemoveCommand( "save" );
+		Cmd_RemoveCommand( "cof_tape_save" );
 		Cmd_RemoveCommand( "savequick" );
 		Cmd_RemoveCommand( "autosave" );
 	}

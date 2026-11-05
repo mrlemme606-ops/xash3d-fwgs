@@ -66,6 +66,7 @@ static const vr_rl_def_t rl_defs[] =
 	{ "v_shotgun", -1, 0, -1, 0, "", "", "^l_", 0.0f, RULE_NONE, false, false, true, false },
 	{ "v_revolver", -1, 0, -1, 0, "", "", "^l_", 0.0f, RULE_NONE, false, false, false, false },
 	{ "v_sledgehammer", -1, 0, -1, 0, "", "", "^l_", 0.0f, RULE_NONE, false, false, false, false },
+	{ "v_camera", -1, 0, -1, 0, "", "", "^l_", 0.0f, RULE_NONE, false, false, false, false },
 };
 
 #define RL_DEF_COUNT	( (int)( sizeof( rl_defs ) / sizeof( rl_defs[0] )))

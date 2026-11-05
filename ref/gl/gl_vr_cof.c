@@ -39,6 +39,7 @@ typedef char vr_cof_plane_size_check[( sizeof( mplane_t ) == 20 ) ? 1 : -1];
 static CVAR_DEFINE_AUTO( vr_cof_rearm, "1", FCVAR_ARCHIVE, "1 = give the game's client.dll renderer (world lighting, sky) its per-frame pass again for every eye and scope picture" );
 static CVAR_DEFINE_AUTO( vr_cof_frustum, "1", FCVAR_ARCHIVE, "1 = replace the client.dll culling frustum with the real eye frustum (stops surfaces at the edge of the view being skipped)" );
 static CVAR_DEFINE_AUTO( vr_cof_eyeorigin, "1", FCVAR_ARCHIVE, "1 = centre the client.dll sky on the eye being drawn instead of the game's view origin" );
+static CVAR_DEFINE_AUTO( vr_cof_depth, "0.8", 0, "far end of the depth range the world is drawn in while the game's client.dll is attached (it keeps 0.8 to 1.0 for its sky). 1 = off" );
 static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepass while the client.dll re-arm is working (normally not needed)" );
 
 #if defined( _WIN32 )
@@ -336,6 +337,24 @@ static void VR_CofStatus_f( void )
 
 #endif
 
+// The DLL splits the depth buffer: world 0.0-0.8, sky entities 0.8-0.9, sky cube 0.9-1.0
+// (glDepthRange calls in sub_1005F3A0 / sub_10063780). The stock engine draws the world over the whole
+// 0-1 range, so every world surface farther than about 40 units is "behind" the sky cube and hidden by it.
+// That is the radius around you in which textures show. Drawing the engine's world in 0-0.8 as well fixes it.
+float VR_CofDepthMax( void )
+{
+	float v = vr_cof_depth.value;
+
+#if defined( _WIN32 )
+	COF_Resolve();
+	if( !cof.ok )
+		return 1.0f;
+#else
+	return 1.0f;
+#endif
+	return ( v > 0.1f && v < 1.0f ) ? v : 1.0f;
+}
+
 qboolean VR_CofKeepPrepass( void )
 {
 	return vr_cof_prepass.value != 0.0f;
@@ -347,5 +366,6 @@ void VR_CofInitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_frustum );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_eyeorigin );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_prepass );
+	gEngfuncs.Cvar_RegisterVariable( &vr_cof_depth );
 	gEngfuncs.Cmd_AddCommand( "vr_cof_status", VR_CofStatus_f, "show whether the game's client.dll renderer is being kept in step with the VR eyes" );
 }
