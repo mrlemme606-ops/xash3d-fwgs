@@ -64,6 +64,8 @@ static struct
 	qboolean	ok;
 	char		why[160];
 	uintptr_t	base;
+	uint32_t	imagebase, imagesize;
+	char		dump[100];
 	volatile int	*arm, *inner, *skydone, *skycount;
 	float		*vieworg;
 	mplane_t	*frustum;
@@ -125,6 +127,19 @@ static qboolean COF_CodeRefs( uintptr_t base, unsigned fn, int len, const unsign
 	return true;
 }
 
+static void COF_Dump( uintptr_t base, unsigned fn )
+{
+	const byte *code = (const byte *)( base + COF_RVA( fn ));
+	int i;
+
+	cof.dump[0] = 0;
+	if( !COF_Readable( code, 24, false ))
+		return;
+
+	for( i = 0; i < 24; i++ )
+		Q_snprintf( cof.dump + i * 3, sizeof( cof.dump ) - i * 3, "%02X ", code[i] );
+}
+
 static void COF_Fail( const char *why )
 {
 	Q_strncpy( cof.why, why, sizeof( cof.why ));
@@ -175,16 +190,21 @@ static void COF_Resolve( void )
 
 	memcpy( &imagebase, pe + lfanew + 24 + 28, 4 );
 	memcpy( &imagesize, pe + lfanew + 24 + 56, 4 );
+	cof.imagebase = imagebase;
+	cof.imagesize = imagesize;
 
-	if( imagebase != COF_BASE || imagesize < COF_RVA( 0x105595E0u ))
+	// the header values are only reported: the code byte check below is what decides
+	if( !COF_CodeRefs( base, COF_FN_FRAMESTART, 0x40, frame_vars, 3 ))
 	{
-		COF_Fail( "client.dll is a different build than the one the notes were made from" );
+		COF_Dump( base, COF_FN_FRAMESTART );
+		COF_Fail( "frame start function not found where expected (different client.dll build?)" );
 		return;
 	}
 
-	if( !COF_CodeRefs( base, COF_FN_FRAMESTART, 0x30, frame_vars, 3 ) || !COF_CodeRefs( base, COF_FN_GATEPASS, 0xA0, gate_vars, 2 ))
+	if( !COF_CodeRefs( base, COF_FN_GATEPASS, 0xA0, gate_vars, 2 ))
 	{
-		COF_Fail( "client.dll code does not match (different build): gate functions not found" );
+		COF_Dump( base, COF_FN_GATEPASS );
+		COF_Fail( "gate pass function not found where expected (different client.dll build?)" );
 		return;
 	}
 
@@ -283,8 +303,14 @@ static void VR_CofStatus_f( void )
 	COF_Resolve();
 
 	gEngfuncs.Con_Printf( "client.dll renderer hook: %s\n", cof.why[0] ? cof.why : "not checked yet" );
+	if( cof.hmod )
+		gEngfuncs.Con_Printf( "  module %p, header image base 0x%08X, image size 0x%X\n", (void *)cof.hmod, cof.imagebase, cof.imagesize );
 	if( !cof.ok )
+	{
+		if( cof.dump[0] )
+			gEngfuncs.Con_Printf( "  first bytes of the function the notes expected: %s\n", cof.dump );
 		return;
+	}
 
 	gEngfuncs.Con_Printf( "  base %p, re-arm %s, frustum %s, eye origin %s\n", (void *)cof.base,
 		vr_cof_rearm.value ? "on" : "off", vr_cof_frustum.value ? "on" : "off", vr_cof_eyeorigin.value ? "on" : "off" );

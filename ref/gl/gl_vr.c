@@ -166,7 +166,7 @@ static CVAR_DEFINE_AUTO( vr_scope_z, "2.5", 0, "scope eyepiece position, above t
 static CVAR_DEFINE_AUTO( vr_scope_radius, "0.4", 0, "radius of the scope lens in game units (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_scope_cam, "6", 0, "how far in front of the eyepiece the scope camera sits" );
 static CVAR_DEFINE_AUTO( vr_scope_range, "20", 0, "the scope view only renders while your head is this close to the eyepiece" );
-static CVAR_DEFINE_AUTO( vr_sky_models, "1", FCVAR_ARCHIVE, "1 = draw the sky models the maps use (sky_sphere_*.mdl) around you instead of the black sky box" );
+static CVAR_DEFINE_AUTO( vr_sky_dome, "0", 0, "1 = draw the sky models (sky_sphere_*.mdl) around you with our own code. Off by default: the game draws its own sky" );
 static CVAR_DEFINE_AUTO( vr_hide_crosshair, "1", FCVAR_ARCHIVE, "1 = switch the game's crosshair off (the laser and red cross are your aim)" );
 static CVAR_DEFINE_AUTO( vr_physical_crouch, "1", FCVAR_ARCHIVE, "1 = crouching in real life also crouches the character, so you can get through low gaps" );
 static CVAR_DEFINE_AUTO( vr_use_fbo, "0", 0, "1 = render each eye into its own buffer at SteamVR's recommended size (experimental). 0 = render in the window and copy" );
@@ -437,7 +437,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_height );
 	gEngfuncs.Cvar_RegisterVariable( &vr_crouch_comp );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hide_crosshair );
-	gEngfuncs.Cvar_RegisterVariable( &vr_sky_models );
+	gEngfuncs.Cvar_RegisterVariable( &vr_sky_dome );
 	gEngfuncs.Cvar_RegisterVariable( &vr_roomscale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_room_deadzone );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hide_models );
@@ -1103,7 +1103,7 @@ qboolean VR_SkyModelsOn( void )
 	if( VR_CofActive())
 		return false;
 
-	return vr_sky_models.value != 0.0f;
+	return vr_sky_dome.value != 0.0f;
 }
 
 qboolean VR_CenterWanted( void )
