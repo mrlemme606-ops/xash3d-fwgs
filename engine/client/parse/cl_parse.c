@@ -2226,6 +2226,7 @@ handles all user messages
 ==============
 */
 extern void IN_VRUserMsg( const char *name );
+extern qboolean IN_VRActive( void );
 
 void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 {
@@ -2288,6 +2289,10 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 		Con_Reportf( "^3USERMSG %s SIZE %i SVC_NUM %i\n",
 			clgame.msg[i].name, iSize, clgame.msg[i].number );
 	}
+
+	// VR: the black cinematic bars (top and bottom) are never shown
+	if( !Q_strcmp( clgame.msg[i].name, "BlackBars" ) && IN_VRActive())
+		return;
 
 	if( clgame.msg[i].func )
 	{

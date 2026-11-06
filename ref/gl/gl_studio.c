@@ -143,6 +143,7 @@ static studiohdr_t *m_pStudioHeader;
 static float m_flGaitMovement;
 static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
+static void R_VRScopeTrack( cl_entity_t *view );
 static qboolean r_vr_mirror;		// the weapon is drawn mirrored (a left-handed weapon held in the right hand)
 static qboolean r_vr_viewmodel;	// the weapon is being drawn at the VR hand
 static cl_entity_t vr_lhand_ent;	// the universal left hand
@@ -3373,6 +3374,9 @@ static int R_StudioDrawModel( int flags )
 	R_VRAdjustBones();
 	R_StudioSaveBones();
 
+	if( r_vr_viewmodel && ( flags & STUDIO_RENDER ) && RI.currententity == tr.viewent )
+		R_VRScopeTrack( RI.currententity );
+
 	if( flags & STUDIO_EVENTS )
 	{
 		R_StudioCalcAttachments( );
@@ -3406,6 +3410,129 @@ static int R_StudioDrawModel( int flags )
 	}
 
 	return 1;
+}
+
+
+/*
+=================
+VR scope tracking
+
+The scope lens sits on the rifle. During the reload animation the rifle moves in your hand, so the lens has to move
+with it. The main bone of the gun (the bone most vertices belong to, arms excluded) is followed: its movement
+relative to the idle pose is handed to the scope code.
+=================
+*/
+static void R_Mat34Mul( float out[3][4], const float a[3][4], const float b[3][4] )
+{
+	for( int r = 0; r < 3; r++ )
+	{
+		for( int c = 0; c < 3; c++ )
+			out[r][c] = a[r][0] * b[0][c] + a[r][1] * b[1][c] + a[r][2] * b[2][c];
+
+		out[r][3] = a[r][0] * b[0][3] + a[r][1] * b[1][3] + a[r][2] * b[2][3] + a[r][3];
+	}
+}
+
+// inverse of a rotation with a uniform scale and a shift
+static void R_Mat34Inv( float out[3][4], const float m[3][4] )
+{
+	float s2 = m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0];
+
+	if( s2 < 1e-8f ) s2 = 1e-8f;
+
+	for( int r = 0; r < 3; r++ )
+		for( int c = 0; c < 3; c++ )
+			out[r][c] = m[c][r] / s2;
+
+	for( int r = 0; r < 3; r++ )
+		out[r][3] = -( out[r][0] * m[0][3] + out[r][1] * m[1][3] + out[r][2] * m[2][3] );
+}
+
+static model_t *r_scope_model;
+static int r_scope_bone = -1;
+static float r_scope_rest[3][4];
+static qboolean r_scope_have_rest;
+
+static void R_VRScopeTrack( cl_entity_t *view )
+{
+	studiohdr_t *hdr = m_pStudioHeader;
+	float inv[3][4], now[3][4], delta_local[3][4], tmp[3][4], world[3][4], restinv[3][4];
+
+	if( !hdr || !hdr->numbones || hdr->numbones > MAXSTUDIOBONES )
+		return;
+
+	if( r_scope_model != view->model )
+	{
+		// a new weapon: find its main bone
+		int count[MAXSTUDIOBONES], best = -1, bestn = 0;
+		mstudiobone_t *pb = (mstudiobone_t *)((byte *)hdr + hdr->boneindex);
+
+		memset( count, 0, sizeof( count ));
+		r_scope_model = view->model;
+		r_scope_have_rest = false;
+
+		for( int b = 0; b < hdr->numbodyparts; b++ )
+		{
+			mstudiobodyparts_t *pbp = (mstudiobodyparts_t *)((byte *)hdr + hdr->bodypartindex) + b;
+
+			for( int m = 0; m < pbp->nummodels; m++ )
+			{
+				mstudiomodel_t *pm = (mstudiomodel_t *)((byte *)hdr + pbp->modelindex) + m;
+				byte *vb = (byte *)hdr + pm->vertinfoindex;
+
+				for( int v = 0; v < pm->numverts; v++ )
+					if( vb[v] < hdr->numbones ) count[vb[v]]++;
+			}
+		}
+
+		for( int b = 0; b < hdr->numbones; b++ )
+		{
+			if( !Q_strnicmp( pb[b].name, "l_", 2 ) || !Q_strnicmp( pb[b].name, "r_", 2 ))
+				continue;
+
+			if( count[b] > bestn )
+			{
+				bestn = count[b];
+				best = b;
+			}
+		}
+
+		r_scope_bone = best;
+	}
+
+	if( r_scope_bone < 0 )
+	{
+		VR_ScopeSetDelta( NULL );
+		return;
+	}
+
+	// the bone in the model's own space (the weapon's axes at the hand and its scale are taken out)
+	R_Mat34Inv( inv, g_studio.rotationmatrix );
+	R_Mat34Mul( now, inv, g_studio.bonestransform[r_scope_bone] );
+
+	// the idle pose is the rest pose: the first frame of an idle sequence
+	{
+		mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex) + bound( 0, view->curstate.sequence, hdr->numseq - 1 );
+
+		if( hdr->numseq > 0 && VR_IsIdleLabel( sd->label ) && view->curstate.frame < 0.5f )
+		{
+			memcpy( r_scope_rest, now, sizeof( now ));
+			r_scope_have_rest = true;
+		}
+	}
+
+	if( !r_scope_have_rest )
+	{
+		VR_ScopeSetDelta( NULL );
+		return;
+	}
+
+	// world movement of the gun since rest: ment * ( now * rest^-1 ) * ment^-1
+	R_Mat34Inv( restinv, r_scope_rest );
+	R_Mat34Mul( delta_local, now, restinv );
+	R_Mat34Mul( tmp, g_studio.rotationmatrix, delta_local );
+	R_Mat34Mul( world, tmp, inv );
+	VR_ScopeSetDelta( world );
 }
 
 /*
@@ -3718,7 +3845,33 @@ void R_RunViewmodelEvents( void )
 		VectorCopy( simorg, RI.currententity->attachment[i] );
 	RI.currentmodel = RI.currententity->model;
 
-	R_StudioDrawModelInternal( RI.currententity, STUDIO_EVENTS );
+	// VR: the events (muzzle flash, shell ejection, tracers) read the attachment points, so they have to be
+	// worked out with the weapon at the VR hand, not at the place the game would hold it in front of the body
+	{
+		cl_entity_t *view = RI.currententity;
+		vec3_t vr_origin, vr_angles, saved_origin, saved_angles;
+		qboolean vr_hand = VR_GetViewModelPose( vr_origin, vr_angles );
+
+		if( vr_hand )
+		{
+			VectorCopy( view->origin, saved_origin );
+			VectorCopy( view->angles, saved_angles );
+			VectorCopy( vr_origin, view->origin );
+			VectorCopy( vr_angles, view->angles );
+			r_vr_viewmodel = true;
+			r_vr_mirror = VR_ViewModelMirror();
+		}
+
+		R_StudioDrawModelInternal( view, STUDIO_EVENTS );
+
+		if( vr_hand )
+		{
+			VectorCopy( saved_origin, view->origin );
+			VectorCopy( saved_angles, view->angles );
+			r_vr_viewmodel = false;
+			r_vr_mirror = false;
+		}
+	}
 }
 
 /*

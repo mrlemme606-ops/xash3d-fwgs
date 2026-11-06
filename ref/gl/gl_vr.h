@@ -112,6 +112,7 @@ const char *VR_EmptyHandName( void );
 qboolean VR_EntityHidden( const cl_entity_t *e );
 float R_StudioModelRadius( model_t *mod );
 qboolean VR_ScopePass( void );
+void VR_ScopeSetDelta( const float m[3][4] );
 qboolean VR_SetupScopeView( const ref_viewpass_t *game, ref_viewpass_t *out );
 void VR_EndScopePass( void );
 qboolean VR_CenterWanted( void );

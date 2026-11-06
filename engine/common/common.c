@@ -619,7 +619,7 @@ static void COM_ZeroSpreadTable( byte *data, int length )
 {
 	// spread (minspread, maxspread, expand, speed, jump) and recoil (minpunch, maxpunch)
 	static const char *keys[] = { "minspread", "maxspread", "expand", "speed", "jump", "minpunch", "maxpunch" };
-	int i = 0;
+	int i = 0, zeroed = 0;
 
 	while( i < length )
 	{
@@ -657,12 +657,15 @@ static void COM_ZeroSpreadTable( byte *data, int length )
 
 				while( i < length && !COM_SpreadDelim( data[i] )) i++;
 				data[vs] = '0';
+				zeroed++;
 				for( vs++; vs < i; vs++ )
 					data[vs] = ' ';
 			}
 			break;
 		}
 	}
+
+	Con_Printf( "spread_settings.txt: %d values set to 0 (cof_zero_spread)\n", zeroed );
 }
 
 /*

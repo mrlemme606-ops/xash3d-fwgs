@@ -942,6 +942,16 @@ void SV_RunCmd( sv_client_t *cl, usercmd_t *ucmd, int random_seed )
 	if( ucmd->impulse ) clent->v.impulse = ucmd->impulse;
 
 	svgame.globals->time = cl->timebase;
+
+	// Cry of Fear: no recoil kick on the aim. The kick of the previous shot would move the next bullets (cof_zero_spread)
+	{
+		static convar_t *zero_spread;
+
+		if( !zero_spread ) zero_spread = Cvar_FindVar( "cof_zero_spread" );
+		if( zero_spread && zero_spread->value && GI && !Q_stricmp( GI->gamefolder, "cryoffear" ))
+			VectorClear( clent->v.punchangle );
+	}
+
 	svgame.dllFuncs.pfnPlayerPreThink( clent );
 	SV_PlayerRunThink( clent, frametime, cl->timebase );
 

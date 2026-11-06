@@ -534,6 +534,8 @@ V_PostRender
 
 ==================
 */
+extern void IN_VRDrawKeyboard( void );
+
 void V_PostRender( void )
 {
 	qboolean		draw_2d = false;
@@ -565,6 +567,7 @@ void V_PostRender( void )
 		SCR_DrawEnts();
 		SCR_DrawNetGraph();
 		SCR_DrawUserCmd();
+		IN_VRDrawKeyboard();
 		Joy_DrawDebug();
 		IN_GyroDrawDebug();
 		SV_DrawOrthoTriangles();

@@ -291,21 +291,34 @@ static void COF_Relight( void )
 	{
 		float *l = cof.dlights + i * 31;
 		const char *tex = (const char *)( l + 15 );
-		qboolean spot = Q_stristr( tex, "flashlight2" ) != NULL;
+		qboolean spot = Q_stristr( tex, "flashlight" ) != NULL;
 
 		if( l[7] < now || l[3] <= 0.0f )
 			continue;
 
 		if( spot )
 		{
+			// phone, flashlight and weapon tacklights: their spotlight texture is gfx/flashlight.tga or flashlight2.tga
 			VectorCopy( hl.start, l );
 			l[10] = -asin( bound( -1.0f, hl.dir[2], 1.0f )) * ( 180.0f / M_PI_F );	// pitch, positive looks down
 			l[11] = atan2( hl.dir[1], hl.dir[0] ) * ( 180.0f / M_PI_F );
 			l[12] = 0.0f;
 		}
-		else if( !tex[0] && l[3] == 60.0f )	// the player's small point lights
+		else if( !tex[0] )
 		{
-			VectorCopy( hl.omni ? hl.start : hl.spot, l );
+			// the glow of a held flare or lantern: the game puts it at the body, move it to the hand
+			if( hl.omni )
+			{
+				vec3_t d;
+
+				VectorSubtract( l, cof.s_org, d );
+				if( DotProduct( d, d ) < 200.0f * 200.0f )
+					VectorCopy( hl.start, l );
+			}
+			else if( l[3] == 60.0f )	// small point lights where a beam lands
+			{
+				VectorCopy( hl.spot, l );
+			}
 		}
 	}
 }

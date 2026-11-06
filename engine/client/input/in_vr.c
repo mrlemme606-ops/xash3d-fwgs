@@ -77,6 +77,8 @@ static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
 static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = body (mouse), 1 = head, 2 = right hand while you use/shoot and head otherwise (default), 3 = right hand always" );
 static CVAR_DEFINE_AUTO( vr_move_digital_ents, "", FCVAR_ARCHIVE, "names of entities (as vr_debug_move shows them, like *16) that always count as a boat or train to stand on" );
+static CVAR_DEFINE_AUTO( vr_comp_keyboard, "1", FCVAR_ARCHIVE, "1 = a small keyboard (a-z, 0-9) is drawn over the computer screen and typed with the laser and trigger" );
+static CVAR_DEFINE_AUTO( vr_move_speed, "1000", FCVAR_ARCHIVE, "walking command a fully pushed stick sends (the game clamps it to its own maximum speed)" );
 static CVAR_DEFINE_AUTO( vr_move_gain, "1.25", FCVAR_ARCHIVE, "how much the left stick is amplified (1 = as is). The stick rarely reaches its full value, so walking felt slower than the keyboard" );
 static CVAR_DEFINE_AUTO( vr_move_digital, "0", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
 static CVAR_DEFINE_AUTO( vr_use_aim, "2", FCVAR_ARCHIVE, "what the use key (right grip) aims along: 0 = your head, 1 = the exact point your hand ray hits, 2 = the direction your hand points" );
@@ -98,7 +100,7 @@ static CVAR_DEFINE_AUTO( vr_key_b, "r", FCVAR_ARCHIVE, "key for B (right control
 static CVAR_DEFINE_AUTO( vr_key_x, "tab", FCVAR_ARCHIVE, "key for X (left controller)" );
 static CVAR_DEFINE_AUTO( vr_key_y, "i", FCVAR_ARCHIVE, "key for Y (left controller)" );
 static CVAR_DEFINE_AUTO( vr_key_lstick, "shift", FCVAR_ARCHIVE, "key for left stick click (sprint)" );
-static CVAR_DEFINE_AUTO( vr_key_rstick, "", FCVAR_ARCHIVE, "key for right stick click (left free, reserved for magazine eject)" );
+static CVAR_DEFINE_AUTO( vr_key_rstick, "!special", FCVAR_ARCHIVE, "right stick click: !special = the weapon's own function (fire mode, phone call, tacklight). Or a key name" );
 static CVAR_DEFINE_AUTO( vr_key_forward, "w", FCVAR_ARCHIVE, "key pressed when the left stick goes forward" );
 static CVAR_DEFINE_AUTO( vr_key_back, "s", FCVAR_ARCHIVE, "key pressed when the left stick goes back" );
 static CVAR_DEFINE_AUTO( vr_key_left, "a", FCVAR_ARCHIVE, "key pressed when the left stick goes left" );
@@ -194,6 +196,88 @@ qboolean IN_VRGetRay( vec3_t origin, vec3_t dir )
 	return true;
 }
 
+
+// ---- the keyboard of the computer screen: a plain QWERTY (a-z, 0-9) drawn over the screen, typed with the laser and trigger
+static int vr_cursor_px, vr_cursor_py;
+static qboolean kbd_manual, kbd_dismissed, kbd_cmd_open, kbd_comp_open;
+static void IN_VRTypeChar( int ch );
+
+typedef struct { const char *label; int ch; } vr_key_t;
+
+static const vr_key_t vr_kbd_keys[4][11] =
+{
+	{ {"1",'1'},{"2",'2'},{"3",'3'},{"4",'4'},{"5",'5'},{"6",'6'},{"7",'7'},{"8",'8'},{"9",'9'},{"0",'0'},{"<-",'\b'} },
+	{ {"q",'q'},{"w",'w'},{"e",'e'},{"r",'r'},{"t",'t'},{"y",'y'},{"u",'u'},{"i",'i'},{"o",'o'},{"p",'p'},{"OK",'\n'} },
+	{ {"a",'a'},{"s",'s'},{"d",'d'},{"f",'f'},{"g",'g'},{"h",'h'},{"j",'j'},{"k",'k'},{"l",'l'},{NULL,0},{NULL,0} },
+	{ {"z",'z'},{"x",'x'},{"c",'c'},{"v",'v'},{"b",'b'},{"n",'n'},{"m",'m'},{"_",' '},{NULL,0},{NULL,0},{NULL,0} }
+};
+
+static qboolean IN_VRKbdShown( void )
+{
+	return kbd_comp_open && !kbd_dismissed && cls.state == ca_active && Cvar_VariableInteger( "vr_enable" ) && Cvar_VariableInteger( "vr_comp_keyboard" );
+}
+
+static void IN_VRKbdRect( int *x0, int *y0, int *cell )
+{
+	int w = refState.width, h = refState.height;
+	int c = Q_min( w * 8 / 10, h * 5 / 10 * 11 / 4 ) / 11;
+
+	*cell = c;
+	*x0 = ( w - c * 11 ) / 2;
+	*y0 = h - c * 4 - h / 40;
+}
+
+static qboolean IN_VRKbdHit( int px, int py, int *ch )
+{
+	int x0, y0, c, row, col;
+
+	IN_VRKbdRect( &x0, &y0, &c );
+
+	if( px < x0 || py < y0 || px >= x0 + c * 11 || py >= y0 + c * 4 )
+		return false;
+
+	row = ( py - y0 ) / c;
+	col = ( px - x0 ) / c;
+
+	if( !vr_kbd_keys[row][col].label )
+		return true;	// inside the board, on nothing: swallow the click anyway
+
+	*ch = vr_kbd_keys[row][col].ch;
+	return true;
+}
+
+void IN_VRDrawKeyboard( void )
+{
+	int x0, y0, c, row, col, ch;
+	qboolean hit;
+	rgba_t white = { 255, 255, 255, 255 };
+
+	if( !IN_VRKbdShown( ))
+		return;
+
+	IN_VRKbdRect( &x0, &y0, &c );
+	ref.dllFuncs.R_Set2DMode( true );
+	hit = IN_VRKbdHit( vr_cursor_px, vr_cursor_py, &ch );
+
+	for( row = 0; row < 4; row++ )
+	{
+		for( col = 0; col < 11; col++ )
+		{
+			const vr_key_t *k = &vr_kbd_keys[row][col];
+			int x = x0 + col * c, y = y0 + row * c;
+			int lw = 0, lh = 0;
+			int over = hit && k->label && vr_cursor_px >= x && vr_cursor_px < x + c && vr_cursor_py >= y && vr_cursor_py < y + c;
+
+			if( !k->label )
+				continue;
+
+			ref.dllFuncs.FillRGBA( kRenderTransTexture, x + 2, y + 2, c - 4, c - 4, over ? 90 : 20, over ? 90 : 20, over ? 90 : 20, 230 );
+			CL_DrawStringLen( &cls.creditsFont, k->label, &lw, &lh, 0 );
+			CL_DrawString( x + ( c - lw ) / 2, y + ( c - lh ) / 2, k->label, white, &cls.creditsFont, FONT_DRAW_NORENDERMODE );
+		}
+	}
+}
+
 // ---- SteamVR keyboard: the characters typed on it become key presses for the game
 static qboolean kbd_manual, kbd_dismissed, kbd_cmd_open;
 static float room_until;
@@ -254,13 +338,16 @@ static qboolean IN_VRNameInList( const char *list, const char *name )
 // "Computer", and closing it makes the game send the command "stopcomputer". That is all we need to know.
 static qboolean kbd_comp_open;
 
+qboolean IN_VRActive( void )
+{
+	return Cvar_VariableInteger( "vr_enable" ) != 0;
+}
+
 void IN_VRUserMsg( const char *name )
 {
 	if( name && !Q_strcmp( name, "Computer" ) && !kbd_comp_open )
 	{
 		kbd_comp_open = true;
-		kbd_dismissed = false;
-		kbd_cmd_open = true;
 	}
 }
 
@@ -268,11 +355,7 @@ void IN_VRUserMsg( const char *name )
 void IN_VRClientCmd( const char *cmd )
 {
 	if( !Q_strnicmp( cmd, "stopcomputer", 12 ))
-	{
 		kbd_comp_open = false;
-		kbd_cmd_open = false;
-		kbd_dismissed = false;
-	}
 }
 
 void IN_VRInit( void )
@@ -336,6 +419,8 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_snap_angle );
 	Cvar_RegisterVariable( &vr_smooth_speed );
 	Cvar_RegisterVariable( &vr_aim_mode );
+	Cvar_RegisterVariable( &vr_comp_keyboard );
+	Cvar_RegisterVariable( &vr_move_speed );
 	Cvar_RegisterVariable( &vr_move_gain );
 	Cvar_RegisterVariable( &vr_move_digital );
 	Cvar_RegisterVariable( &vr_move_digital_ents );
@@ -379,7 +464,32 @@ static void IN_VRUpdateButtons( int buttons )
 
 		if( FBitSet( buttons, BIT( i )))
 		{
-			int key = IN_VRKeyFromName( vr_key_cvars[i]->string );
+			const char *ks = vr_key_cvars[i]->string;
+			int key;
+
+			if( i == VRB_RSTICK && !ks[0] )
+				ks = "!special";	// an old saved empty value too
+
+			key = IN_VRKeyFromName( ks );
+
+			// "!command": run a game command instead of pressing a key, so it works whatever the keys are bound to
+			if( ks[0] == '!' )
+			{
+				Cbuf_AddText( va( "%s\n", ks + 1 ));
+				continue;
+			}
+
+			// the computer's keyboard: a click on a key types it, and the game never sees that click
+			if( key == K_MOUSE1 && IN_VRKbdShown())
+			{
+				int kch = 0;
+
+				if( IN_VRKbdHit( vr_cursor_px, vr_cursor_py, &kch ))
+				{
+					if( kch ) IN_VRTypeChar( kch );
+					continue;
+				}
+			}
 
 			if( key )
 			{
@@ -459,6 +569,9 @@ static void IN_VRMoveCursor( void )
 
 	// the real cursor first (client code that reads the OS cursor), then the exact position for the UI,
 	// so a window larger than the desktop can't clamp where the laser points
+	vr_cursor_px = (int)x;
+	vr_cursor_py = (int)y;
+
 	Platform_SetMousePos( x, y );
 	VGui_MouseMove( x, y );
 	UI_MouseMove( x, y );
@@ -495,7 +608,8 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			if( Q_stricmp( kbd_map, clgame.mapname ))
 			{
 				Q_strncpy( kbd_map, clgame.mapname, sizeof( kbd_map ));
-				kbd_comp_open = kbd_cmd_open = false;
+				kbd_comp_open = false;
+				kbd_cmd_open = false;
 			}
 		}
 
@@ -912,8 +1026,10 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			side *= k;
 		}
 
-		cmd->forwardmove += fwd * Cvar_VariableValue( "cl_forwardspeed" );
-		cmd->sidemove += side * Cvar_VariableValue( "cl_sidespeed" );
+		// the game limits the speed itself (its own maximum), the keys send more than cl_forwardspeed too:
+		// send enough that a pushed stick always reaches that maximum, like the keyboard does
+		cmd->forwardmove += fwd * Q_max( Cvar_VariableValue( "cl_forwardspeed" ), vr_move_speed.value );
+		cmd->sidemove += side * Q_max( Cvar_VariableValue( "cl_sidespeed" ), vr_move_speed.value );
 
 		if( fwd > 0.3f ) SetBits( cmd->buttons, IN_FORWARD );
 		if( fwd < -0.3f ) SetBits( cmd->buttons, IN_BACK );

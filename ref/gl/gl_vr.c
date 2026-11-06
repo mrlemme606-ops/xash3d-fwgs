@@ -154,6 +154,7 @@ static CVAR_DEFINE_AUTO( vr_light_z, "0", 0, "where the light sits, above the ha
 static CVAR_DEFINE_AUTO( vr_scope, "1", FCVAR_ARCHIVE, "1 = rifle scope: lift the rifle to your eye and the scope shows a zoomed view" );
 static CVAR_DEFINE_AUTO( vr_scope_models, "rifle+sniper+hunting", 0, "weapon model names (separated by +) that have a scope" );
 static CVAR_DEFINE_AUTO( vr_scope_fov, "2", 0, "field of view of the scope image in degrees (smaller = more zoom, saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_scope_follow, "1", FCVAR_ARCHIVE, "1 = the scope lens moves with the rifle during reload animations" );
 static CVAR_DEFINE_AUTO( vr_scope_x, "0.4", 0, "scope eyepiece position, forward of the hand (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_scope_y, "-0.3", 0, "scope eyepiece position, left of the hand (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_scope_z, "2.5", 0, "scope eyepiece position, above the hand (saved per weapon)" );
@@ -448,6 +449,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_fov );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_follow );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_x );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_y );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_z );
@@ -1304,9 +1306,18 @@ qboolean VR_ViewModelBoneHidden( const char *bonename )
 {
 	qboolean hidden = VR_ListMatches( vr_left_pass ? vr_lhand_hide_bones.string : vr_vm_hide_bones.string, bonename, false );
 
-	// a weapon the game holds in the left hand: show its left arm (mirrored it becomes the right one), hide the other
+	// a weapon the game holds in the left hand: show its left arm (mirrored it becomes the right one), hide the other.
+	// What you put in vr_vm_hide_bones still hides those parts, only the default left arm entry is left out here
 	if( !vr_left_pass && VR_ViewModelMirror( ))
-		hidden = !Q_strnicmp( bonename, "r_", 2 );
+	{
+		char list[256], *p;
+
+		Q_strncpy( list, vr_vm_hide_bones.string, sizeof( list ));
+		while(( p = Q_strstr( list, "^l_" )) != NULL )
+			memmove( p, p + 3, Q_strlen( p + 3 ) + 1 );
+
+		hidden = !Q_strnicmp( bonename, "r_", 2 ) || ( list[0] && list[0] != '+' && VR_ListMatches( list, bonename, false ));
+	}
 
 	return VR_ReloadBoneHidden( vr_left_pass, bonename, hidden );
 }
@@ -1577,7 +1588,7 @@ static const char *vr_builtin_profiles[][2] =
 {
 	{ "v_actions", "vr_vm_grip_x -12\nvr_vm_grip_y -20\nvr_vm_grip_z -11\nvr_vm_pitch -70\nvr_vm_yaw 80\nvr_vm_roll -10\nvr_vm_flip_roll 0\nvr_vm_scale 0.19\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_branch", "vr_vm_grip_x 13\nvr_vm_grip_y -6.5\nvr_vm_grip_z -8\nvr_vm_pitch 7\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 0.18\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0\nvr_scope_y 0\nvr_scope_z 3\nvr_scope_radius 1.2\nvr_scope_fov 10\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
-	{ "v_camera", "vr_vm_grip_x 10\nvr_vm_grip_y -5\nvr_vm_grip_z -3\nvr_vm_pitch 60\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.02\nvr_hand_pitch 60\nvr_vm_arm_cut 20\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
+	{ "v_camera", "vr_vm_grip_x 10\nvr_vm_grip_y -5\nvr_vm_grip_z -3\nvr_vm_pitch 60\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_aim_pitch 70\nvr_vm_scale 0.02\nvr_hand_pitch 60\nvr_vm_arm_cut 20\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_flare", "vr_vm_grip_x 12\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 0\nvr_vm_yaw 10\nvr_vm_roll 60\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_flashlight", "vr_vm_grip_x 8\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 100\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 1.2\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 100\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_g43", "vr_vm_grip_x 4\nvr_vm_grip_y -1.5\nvr_vm_grip_z -2\nvr_vm_pitch 0\nvr_vm_yaw 2.3\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.45\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
@@ -1952,7 +1963,7 @@ static void VR_UpdateHandLight( const ref_viewpass_t *game )
 {
 	vec3_t start, dir, side, up, end, spot;
 
-	if( !vr_phone_light.value || !vr.hand[1].valid || ( !vr_vm_light && !vr_vm_omni )
+	if( !vr_phone_light.value || !vr.hand[1].valid
 		|| !tr.viewent || !tr.viewent->model || Q_strcmp( tr.viewent->model->name, vr_tune_model ))
 	{
 		VR_CofSetHandLight( false, false, NULL, NULL, NULL );
@@ -2521,6 +2532,22 @@ static qboolean vr_scope_ready;
 static vec3_t vr_scope_pos, vr_scope_f, vr_scope_l, vr_scope_u;
 static float vr_scope_half_w = 0.28f;	// half the width of the middle square, as a fraction of the picture
 
+// how far the gun moved from its idle pose, from the studio code (reload animation)
+static float vr_scope_delta[3][4];
+static qboolean vr_scope_delta_ok;
+static double vr_scope_delta_time;
+
+void VR_ScopeSetDelta( const float m[3][4] )
+{
+	vr_scope_delta_ok = m != NULL;
+
+	if( m )
+	{
+		memcpy( vr_scope_delta, m, sizeof( vr_scope_delta ));
+		vr_scope_delta_time = gp_cl ? gp_cl->time : 0.0;
+	}
+}
+
 qboolean VR_ScopePass( void )
 {
 	return vr_scope_in_pass;
@@ -2548,6 +2575,29 @@ static qboolean VR_ScopeCompute( void )
 	VectorMA( vr.hand[1].pos, vr_scope_x.value, vr_scope_f, vr_scope_pos );
 	VectorMA( vr_scope_pos, vr_scope_y.value, vr_scope_l, vr_scope_pos );
 	VectorMA( vr_scope_pos, vr_scope_z.value, vr_scope_u, vr_scope_pos );
+
+	// the lens is part of the gun: it moves with it while it reloads
+	if( vr_scope_follow.value && vr_scope_delta_ok && gp_cl && gp_cl->time - vr_scope_delta_time < 0.25 )
+	{
+		vec3_t p, f, l, u;
+		int i;
+
+		for( i = 0; i < 3; i++ )
+		{
+			p[i] = vr_scope_delta[i][0] * vr_scope_pos[0] + vr_scope_delta[i][1] * vr_scope_pos[1] + vr_scope_delta[i][2] * vr_scope_pos[2] + vr_scope_delta[i][3];
+			f[i] = vr_scope_delta[i][0] * vr_scope_f[0] + vr_scope_delta[i][1] * vr_scope_f[1] + vr_scope_delta[i][2] * vr_scope_f[2];
+			l[i] = vr_scope_delta[i][0] * vr_scope_l[0] + vr_scope_delta[i][1] * vr_scope_l[1] + vr_scope_delta[i][2] * vr_scope_l[2];
+			u[i] = vr_scope_delta[i][0] * vr_scope_u[0] + vr_scope_delta[i][1] * vr_scope_u[1] + vr_scope_delta[i][2] * vr_scope_u[2];
+		}
+
+		VectorCopy( p, vr_scope_pos );
+		VectorNormalize( f );
+		VectorNormalize( l );
+		VectorNormalize( u );
+		VectorCopy( f, vr_scope_f );
+		VectorCopy( l, vr_scope_l );
+		VectorCopy( u, vr_scope_u );
+	}
 
 	// the head must be close to the eyepiece, and behind it
 	VectorSubtract( vr.head_game, vr_scope_pos, d );
