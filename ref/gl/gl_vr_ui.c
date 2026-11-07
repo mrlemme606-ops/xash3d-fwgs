@@ -40,6 +40,8 @@ static CVAR_DEFINE_AUTO( vr_hud_band, "0 0.14", FCVAR_ARCHIVE, "height of the st
 static CVAR_DEFINE_AUTO( vr_hud_x1, "0 0.30", FCVAR_ARCHIVE, "first strip (health, stamina), as: left right (0 to 1 of the screen width). Needs quotes" );
 static CVAR_DEFINE_AUTO( vr_hud_x2, "0.78 1", FCVAR_ARCHIVE, "second strip (ammo), as: left right. Set to \"0 0\" for no second strip" );
 static CVAR_DEFINE_AUTO( vr_hud_pos, "0 0.045 0.06", FCVAR_ARCHIVE, "where the HUD sits on the controller, as: x y z in meters (y = up, z = toward your wrist). Needs quotes" );
+static CVAR_DEFINE_AUTO( vr_hud_side, "0", FCVAR_ARCHIVE, "which hand wears the HUD: 0 = left (like a watch), 1 = right" );
+static CVAR_DEFINE_AUTO( vr_hud_rot, "0 0", FCVAR_ARCHIVE, "extra turn of the hand HUD, as: yaw roll in degrees (vr_hud_tilt is the third direction). Needs quotes" );
 static CVAR_DEFINE_AUTO( vr_hud_tilt, "0", FCVAR_ARCHIVE, "tilt of the hand HUD around the controller's side axis, in degrees" );
 static CVAR_DEFINE_AUTO( vr_hud_alpha, "1.0", FCVAR_ARCHIVE, "opacity of the hand HUD when you look at it" );
 static CVAR_DEFINE_AUTO( vr_ui_pointer, "0.035", 0, "size in meters of the dot that shows where your hand points on the UI, drawn on top of everything (0 = off)" );
@@ -95,6 +97,8 @@ void VR_UIInitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_ui_maxwidth );
 	gEngfuncs.Cvar_RegisterVariable( &vr_ui_pointer );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hud_hand );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hud_side );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hud_rot );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hud_width );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hud_band );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hud_x1 );
@@ -225,6 +229,15 @@ void VR_HUDCapture( void )
 	if( !vr_hud_hand.value || ui.failed || hud.failed || !VR_IsActive( ) || !VR_FrameDone( ))
 		return;
 
+	// inventory, computer, letters, cutscenes: the HUD stays in the picture (nothing is cut out of it, nothing goes on the hand)
+	{
+		static cvar_t *off;
+
+		if( !off ) off = gEngfuncs.pfnGetCvarPointer( "vr_in_hud_off" );
+		if( off && off->value > 0.5f )
+			return;
+	}
+
 	VR_HUDRects( w, h, rect );
 	th = rect[0][3];
 	tw = rect[0][2] + rect[1][2];
@@ -309,7 +322,7 @@ static void VR_UIUpdateHUD( void )
 	if( hud.failed || !ui.overlay )
 		return;
 
-	if( !vr_hud_hand.value || !hud.have || !VR_GetHandPose( 1, cm, &dev ))
+	if( !vr_hud_hand.value || !hud.have || !VR_GetHandPose( vr_hud_side.value ? 1 : 0, cm, &dev ))
 	{
 		VR_UIHideHUD();
 		return;
@@ -336,12 +349,42 @@ static void VR_UIUpdateHUD( void )
 	rel.m[1][0] = 0.0f;	rel.m[1][1] = sn;	rel.m[1][2] = cs;	rel.m[1][3] = pos[1];
 	rel.m[2][0] = 0.0f;	rel.m[2][1] = -cs;	rel.m[2][2] = sn;	rel.m[2][3] = pos[2];
 
+	// the extra turns: yaw around the panel's up axis, roll around its normal (done in the panel's own space)
+	{
+		float rot[2] = { 0.0f, 0.0f }, cy, sy, cr, sr, b[3][3], e[3][3];
+		int r, c, k;
+
+		VR_ParseFloats( vr_hud_rot.string, rot, 2 );
+		cy = cos( DEG2RAD( rot[0] )); sy = sin( DEG2RAD( rot[0] ));
+		cr = cos( DEG2RAD( rot[1] )); sr = sin( DEG2RAD( rot[1] ));
+
+		// e = Ry( yaw ) * Rz( roll ), in the panel's own axes (x right, y up, z out of the panel)
+		e[0][0] = cy * cr;	e[0][1] = -cy * sr;	e[0][2] = sy;
+		e[1][0] = sr;		e[1][1] = cr;		e[1][2] = 0.0f;
+		e[2][0] = -sy * cr;	e[2][1] = sy * sr;	e[2][2] = cy;
+
+		for( r = 0; r < 3; r++ )
+			for( c = 0; c < 3; c++ )
+				b[r][c] = rel.m[r][c];
+
+		for( r = 0; r < 3; r++ )
+			for( c = 0; c < 3; c++ )
+			{
+				float v = 0.0f;
+
+				for( k = 0; k < 3; k++ )
+					v += b[r][k] * e[k][c];
+
+				rel.m[r][c] = v;
+			}
+	}
+
 	// is the hand turned toward your eyes? fade in when it is
 	VR_GetHeadMatrix( hm );
 
 	for( i = 0; i < 3; i++ )
 	{
-		n[i] = cm[i][1] * cs + cm[i][2] * sn;
+		n[i] = cm[i][0] * rel.m[0][2] + cm[i][1] * rel.m[1][2] + cm[i][2] * rel.m[2][2];
 		p[i] = cm[i][3] + cm[i][0] * pos[0] + cm[i][1] * pos[1] + cm[i][2] * pos[2];
 		to[i] = hm[i][3] - p[i];
 	}

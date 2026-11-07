@@ -54,6 +54,8 @@ static CVAR_DEFINE_AUTO( vr_in_ray_dx, "0", 0, "(internal) direction the right h
 static CVAR_DEFINE_AUTO( vr_in_ray_dy, "0", 0, "(internal) direction the right hand points" );
 static CVAR_DEFINE_AUTO( vr_in_ray_dz, "0", 0, "(internal) direction the right hand points" );
 static CVAR_DEFINE_AUTO( vr_in_whip, "0", 0, "(internal) pistol whipping right now" );
+static CVAR_DEFINE_AUTO( vr_in_hud_off, "0", 0, "(internal) a full screen UI or a cutscene is shown: the HUD stays on the screen, not on the hand" );
+static CVAR_DEFINE_AUTO( vr_in_haptic, "0", 0, "(internal) ask the renderer for a vibration: 100 * hand (0 left, 1 right) + number of pulses" );
 static CVAR_DEFINE_AUTO( vr_in_menu, "1", 0, "(internal) a menu or the console is open" );
 static CVAR_DEFINE_AUTO( vr_shake, "0", FCVAR_ARCHIVE, "1 = the game may shake the camera (explosions, hits). Off is much easier on the stomach in VR" );
 static CVAR_DEFINE_AUTO( vr_in_dir_yaw, "0", 0, "(internal) yaw of the direction the right hand points, relative to the body" );
@@ -78,8 +80,9 @@ static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn spe
 static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = body (mouse), 1 = head, 2 = right hand while you use/shoot and head otherwise (default), 3 = right hand always" );
 static CVAR_DEFINE_AUTO( vr_move_digital_ents, "", FCVAR_ARCHIVE, "names of entities (as vr_debug_move shows them, like *16) that always count as a boat or train to stand on" );
 static CVAR_DEFINE_AUTO( vr_comp_keyboard, "1", FCVAR_ARCHIVE, "1 = a small keyboard (a-z, 0-9) is drawn over the computer screen and typed with the laser and trigger" );
-static CVAR_DEFINE_AUTO( vr_move_speed, "1000", FCVAR_ARCHIVE, "walking command a fully pushed stick sends (the game clamps it to its own maximum speed)" );
-static CVAR_DEFINE_AUTO( vr_move_gain, "1.25", FCVAR_ARCHIVE, "how much the left stick is amplified (1 = as is). The stick rarely reaches its full value, so walking felt slower than the keyboard" );
+static CVAR_DEFINE_AUTO( vr_move_speed, "320", FCVAR_ARCHIVE, "walking command a fully pushed stick sends when the game maximum speed is not known yet" );
+static CVAR_DEFINE_AUTO( vr_move_deadzone, "0.12", FCVAR_ARCHIVE, "left stick dead zone for walking (0..1)" );
+static CVAR_DEFINE_AUTO( vr_move_full, "0.95", FCVAR_ARCHIVE, "stick deflection that counts as full speed (0..1)" );
 static CVAR_DEFINE_AUTO( vr_move_digital, "0", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
 static CVAR_DEFINE_AUTO( vr_use_aim, "2", FCVAR_ARCHIVE, "what the use key (right grip) aims along: 0 = your head, 1 = the exact point your hand ray hits, 2 = the direction your hand points" );
 static CVAR_DEFINE_AUTO( vr_melee_enable, "1", FCVAR_ARCHIVE, "1 = swinging your hand fast with a melee weapon attacks" );
@@ -98,9 +101,9 @@ static CVAR_DEFINE_AUTO( vr_key_lgrip, "f", FCVAR_ARCHIVE, "key for left grip" )
 static CVAR_DEFINE_AUTO( vr_key_a, "space", FCVAR_ARCHIVE, "key for A (right controller)" );
 static CVAR_DEFINE_AUTO( vr_key_b, "r", FCVAR_ARCHIVE, "key for B (right controller)" );
 static CVAR_DEFINE_AUTO( vr_key_x, "tab", FCVAR_ARCHIVE, "key for X (left controller)" );
-static CVAR_DEFINE_AUTO( vr_key_y, "i", FCVAR_ARCHIVE, "key for Y (left controller)" );
+static CVAR_DEFINE_AUTO( vr_key_y, "escape", FCVAR_ARCHIVE, "key for Y (left controller)" );
 static CVAR_DEFINE_AUTO( vr_key_lstick, "shift", FCVAR_ARCHIVE, "key for left stick click (sprint)" );
-static CVAR_DEFINE_AUTO( vr_key_rstick, "!special", FCVAR_ARCHIVE, "right stick click: !special = the weapon's own function (fire mode, phone call, tacklight). Or a key name" );
+static CVAR_DEFINE_AUTO( vr_key_rstick, "!weapontoggle", FCVAR_ARCHIVE, "right stick click: !special = the weapon's own function (fire mode, phone call, tacklight). Or a key name" );
 static CVAR_DEFINE_AUTO( vr_key_forward, "w", FCVAR_ARCHIVE, "key pressed when the left stick goes forward" );
 static CVAR_DEFINE_AUTO( vr_key_back, "s", FCVAR_ARCHIVE, "key pressed when the left stick goes back" );
 static CVAR_DEFINE_AUTO( vr_key_left, "a", FCVAR_ARCHIVE, "key pressed when the left stick goes left" );
@@ -132,7 +135,10 @@ static int vr_pressed_key[VRB_COUNT];	// key code sent on press, 0 = not held
 static int vr_prev_buttons;
 static qboolean vr_snap_latched;
 static qboolean vr_up_latched, vr_down_latched;
-static qboolean vr_crouch_toggled;
+static qboolean vr_crouch_toggled, vr_dodging, vr_qs_active;
+static int vr_qs_sel;
+static vec3_t vr_qs_start;
+static double vr_a_since;
 static int vr_jump_frames;
 static qboolean vr_dir_down[4];	// forward, back, left, right (with hysteresis)
 static int vr_last_movetype = -1;
@@ -220,7 +226,7 @@ static qboolean IN_VRKbdShown( void )
 static void IN_VRKbdRect( int *x0, int *y0, int *cell )
 {
 	int w = refState.width, h = refState.height;
-	int c = Q_min( w * 8 / 10, h * 5 / 10 * 11 / 4 ) / 11;
+	int c = Q_min( w * 95 / 100 / 11, h * 62 / 100 / 4 );
 
 	*cell = c;
 	*x0 = ( w - c * 11 ) / 2;
@@ -246,8 +252,32 @@ static qboolean IN_VRKbdHit( int px, int py, int *ch )
 	return true;
 }
 
+static void IN_VRDrawQuickSlots( void )
+{
+	int w = refState.width, h = refState.height, c = h / 7, i;
+	int x0 = ( w - c * 3 - 2 * ( c / 8 )) / 2, y0 = h - c - h / 12;
+	rgba_t white = { 255, 255, 255, 255 };
+
+	if( !vr_qs_active )
+		return;
+
+	ref.dllFuncs.R_Set2DMode( true );
+
+	for( i = 0; i < 3; i++ )
+	{
+		char label[2] = { '1' + i, 0 };
+		int x = x0 + i * ( c + c / 8 ), lw = 0, lh = 0, on = ( vr_qs_sel == i + 1 );
+
+		ref.dllFuncs.FillRGBA( kRenderTransTexture, x, y0, c, c, on ? 200 : 20, on ? 160 : 20, on ? 40 : 20, 230 );
+		CL_DrawStringLen( &cls.creditsFont, label, &lw, &lh, 0 );
+		CL_DrawString( x + ( c - lw ) / 2, y0 + ( c - lh ) / 2, label, white, &cls.creditsFont, FONT_DRAW_NORENDERMODE );
+	}
+}
+
 void IN_VRDrawKeyboard( void )
 {
+	IN_VRDrawQuickSlots();
+
 	int x0, y0, c, row, col, ch;
 	qboolean hit;
 	rgba_t white = { 255, 255, 255, 255 };
@@ -345,6 +375,10 @@ qboolean IN_VRActive( void )
 
 void IN_VRUserMsg( const char *name )
 {
+	// a new text message on Simon's phone: two short vibrations in the right hand
+	if( name && !Q_strcmp( name, "UnreadSMS" ) && Cvar_VariableInteger( "vr_enable" ))
+		Cvar_DirectSetValue( &vr_in_haptic, 102.0f );
+
 	if( name && !Q_strcmp( name, "Computer" ) && !kbd_comp_open )
 	{
 		kbd_comp_open = true;
@@ -402,6 +436,8 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_ray_dz );
 	Cvar_RegisterVariable( &vr_in_whip );
 	Cvar_RegisterVariable( &vr_in_menu );
+	Cvar_RegisterVariable( &vr_in_haptic );
+	Cvar_RegisterVariable( &vr_in_hud_off );
 	Cvar_RegisterVariable( &vr_shake );
 	Cvar_RegisterVariable( &vr_in_crouch );
 	Cvar_RegisterVariable( &vr_in_buttons );
@@ -421,7 +457,8 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_aim_mode );
 	Cvar_RegisterVariable( &vr_comp_keyboard );
 	Cvar_RegisterVariable( &vr_move_speed );
-	Cvar_RegisterVariable( &vr_move_gain );
+	Cvar_RegisterVariable( &vr_move_deadzone );
+	Cvar_RegisterVariable( &vr_move_full );
 	Cvar_RegisterVariable( &vr_move_digital );
 	Cvar_RegisterVariable( &vr_move_digital_ents );
 	Cvar_RegisterVariable( &vr_debug_move );
@@ -467,8 +504,19 @@ static void IN_VRUpdateButtons( int buttons )
 			const char *ks = vr_key_cvars[i]->string;
 			int key;
 
-			if( i == VRB_RSTICK && !ks[0] )
-				ks = "!special";	// an old saved empty value too
+			// old saved values: the right stick was empty or "!special" (not the right command), Y was "i"
+			if( i == VRB_RSTICK && ( !ks[0] || !Q_strcmp( ks, "!special" )))
+				ks = "!weapontoggle";
+			if( i == VRB_Y && ( !ks[0] || !Q_strcmp( ks, "i" )))
+				ks = "escape";
+
+			// sprinting backwards is a dodge (the game's +dodge) instead
+			if( i == VRB_LSTICK && vr_in_move_fwd.value < -0.5f && cls.state == ca_active && cls.key_dest == key_game )
+			{
+				vr_dodging = true;
+				Cbuf_AddText( "+dodge\n" );
+				continue;
+			}
 
 			key = IN_VRKeyFromName( ks );
 
@@ -496,6 +544,11 @@ static void IN_VRUpdateButtons( int buttons )
 				vr_pressed_key[i] = key;
 				IN_VRSendKey( key, true );
 			}
+		}
+		else if( i == VRB_LSTICK && vr_dodging )
+		{
+			vr_dodging = false;
+			Cbuf_AddText( "-dodge\n" );
 		}
 		else if( vr_pressed_key[i] )
 		{
@@ -542,6 +595,10 @@ static void IN_VRMoveCursor( void )
 	x = bound( 0, x, refState.width - 1 );
 	y = bound( 0, y, refState.height - 1 );
 
+	// where the laser points right now (the keyboard of the computer uses this, not the delayed click position)
+	vr_cursor_px = x;
+	vr_cursor_py = y;
+
 	vr_cur_x[vr_cur_n & 15] = x;
 	vr_cur_y[vr_cur_n & 15] = y;
 	vr_cur_t[vr_cur_n & 15] = host.realtime;
@@ -569,9 +626,6 @@ static void IN_VRMoveCursor( void )
 
 	// the real cursor first (client code that reads the OS cursor), then the exact position for the UI,
 	// so a window larger than the desktop can't clamp where the laser points
-	vr_cursor_px = (int)x;
-	vr_cursor_py = (int)y;
-
 	Platform_SetMousePos( x, y );
 	VGui_MouseMove( x, y );
 	UI_MouseMove( x, y );
@@ -591,6 +645,14 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 
 		if( vr_in_menu.value != menu )
 			Cvar_DirectSetValue( &vr_in_menu, menu );
+
+		// inventory, computer, letters and cutscenes (the camera is not the player) show the HUD normally
+		{
+			float off = ( menu > 0.5f || ( cls.state == ca_active && cl.viewentity != cl.playernum + 1 )) ? 1.0f : 0.0f;
+
+			if( vr_in_hud_off.value != off )
+				Cvar_DirectSetValue( &vr_in_hud_off, off );
+		}
 	}
 
 	{
@@ -932,17 +994,54 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		Cvar_DirectSetValue( &vr_in_duck_drop, ducking ? bound( 0.0f, stand_height - h, 60.0f ) : 0.0f );
 	}
 
-	// right stick flicks: up = jump (a short key press), down = toggle crouch
+	// right stick: up and hold = the quick slot selector (move your hand to slot 1, 2 or 3 and let go), down = toggle crouch.
+	// Jumping is the A button: a tap jumps, holding it also crouches, for jumps that need a crouch in the air
 	y = vr_in_stick_y.value;
 
-	if( y > 0.7f && !vr_up_latched )
+	if( in_game && y > 0.7f && !vr_up_latched )
 	{
+		vec3_t o, d;
+
 		vr_up_latched = true;
-		vr_jump_frames = 3;
+		vr_qs_active = IN_VRGetRay( o, d );
+
+		if( vr_qs_active )
+			VectorCopy( o, vr_qs_start );
 	}
 	else if( y < 0.3f )
 	{
+		if( vr_up_latched && vr_qs_active && vr_qs_sel > 0 )
+		{
+			int key = '0' + vr_qs_sel;
+
+			IN_VRSendKey( key, true );
+			IN_VRSendKey( key, false );
+		}
+
 		vr_up_latched = false;
+		vr_qs_active = false;
+		vr_qs_sel = 0;
+	}
+
+	if( vr_qs_active )
+	{
+		vec3_t o, d, right;
+		float yaw = DEG2RAD( cl.viewangles[YAW] ), side, up;
+
+		vr_qs_sel = 0;
+
+		if( IN_VRGetRay( o, d ))
+		{
+			right[0] = sin( yaw );
+			right[1] = -cos( yaw );
+			right[2] = 0.0f;
+			side = ( o[0] - vr_qs_start[0] ) * right[0] + ( o[1] - vr_qs_start[1] ) * right[1];
+			up = o[2] - vr_qs_start[2];
+
+			if( side < -5.0f ) vr_qs_sel = 1;
+			else if( side > 5.0f ) vr_qs_sel = 3;
+			else if( up > 6.0f ) vr_qs_sel = 2;
+		}
 	}
 
 	if( y < -0.7f && !vr_down_latched )
@@ -953,6 +1052,19 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	else if( y > -0.3f )
 	{
 		vr_down_latched = false;
+	}
+
+	// hold A: a crouch jump
+	if( FBitSet( buttons, BIT( VRB_A )))
+	{
+		if( vr_a_since == 0.0 )
+			vr_a_since = host.realtime;
+		else if( host.realtime - vr_a_since > 0.18 )
+			buttons |= BIT( VRB_CROUCH );
+	}
+	else
+	{
+		vr_a_since = 0.0;
 	}
 
 	if( vr_jump_frames > 0 )
@@ -1015,21 +1127,34 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	// analog walking, when the keys are not doing it
 	if( !digital )
 	{
-		// the stick hardly ever reaches its full value: amplify it, so walking is as fast as with the keyboard
-		float m = sqrt( fwd * fwd + side * side ), gain = vr_move_gain.value;
-
-		if( m > 0.01f && gain > 0.0f )
+		// 100% stick is 100% speed, and a gentle push is a gentle walk: a small dead zone, then a straight line up to
+		// vr_move_full (the stick rarely reaches 1.0)
 		{
-			float k = Q_min( m * gain, 1.0f ) / m;
+			float m = sqrt( fwd * fwd + side * side );
+			float dz = vr_move_deadzone.value, full = Q_max( vr_move_full.value, dz + 0.1f );
 
-			fwd *= k;
-			side *= k;
+			if( m < dz )
+			{
+				fwd = side = 0.0f;
+			}
+			else
+			{
+				float k = bound( 0.0f, ( m - dz ) / ( full - dz ), 1.0f ) / m;
+
+				fwd *= k;
+				side *= k;
+			}
 		}
 
 		// the game limits the speed itself (its own maximum), the keys send more than cl_forwardspeed too:
 		// send enough that a pushed stick always reaches that maximum, like the keyboard does
-		cmd->forwardmove += fwd * Q_max( Cvar_VariableValue( "cl_forwardspeed" ), vr_move_speed.value );
-		cmd->sidemove += side * Q_max( Cvar_VariableValue( "cl_sidespeed" ), vr_move_speed.value );
+		{
+			// full stick = the game's own maximum speed (what the keys reach), so a half push is half of it
+			float top = ( clgame.pmove && clgame.pmove->maxspeed > 1.0f ) ? clgame.pmove->maxspeed : vr_move_speed.value;
+
+			cmd->forwardmove += fwd * top;
+			cmd->sidemove += side * top;
+		}
 
 		if( fwd > 0.3f ) SetBits( cmd->buttons, IN_FORWARD );
 		if( fwd < -0.3f ) SetBits( cmd->buttons, IN_BACK );

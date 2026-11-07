@@ -96,7 +96,7 @@ static CVAR_DEFINE_AUTO( vr_rl_pouch_fwd, "3", FCVAR_ARCHIVE, "where the magazin
 static CVAR_DEFINE_AUTO( vr_rl_pouch_radius, "14", FCVAR_ARCHIVE, "how close your left hand has to be to the pouch to take a magazine" );
 static CVAR_DEFINE_AUTO( vr_rl_mag_radius, "10", FCVAR_ARCHIVE, "how close the magazine has to be to the magazine well to go in (also to pull it out by hand)" );
 static CVAR_DEFINE_AUTO( vr_rl_bolt_radius, "9", FCVAR_ARCHIVE, "how close your left hand has to be to the slide / bolt to grab it" );
-static CVAR_DEFINE_AUTO( vr_rl_grip_radius, "12", FCVAR_ARCHIVE, "how close your left hand has to be to the gun for the left grip to hold it with two hands" );
+CVAR_DEFINE_AUTO( vr_rl_grip_radius, "12", FCVAR_ARCHIVE, "how close your left hand has to be to the gun for the left grip to hold it with two hands" );
 static CVAR_DEFINE_AUTO( vr_rl_travel_scale, "1", FCVAR_ARCHIVE, "multiplies how far slides and bolts travel (1 = table value)" );
 static CVAR_DEFINE_AUTO( vr_rl_always_rack, "0", FCVAR_ARCHIVE, "1 = the bolt always has to be worked after a reload, not only when the gun was empty" );
 static CVAR_DEFINE_AUTO( vr_rl_mute, "reload+clip+slide+bolt+rack+cock+charge+chamber+eject+insert+magin+magout", FCVAR_ARCHIVE, "sounds of the player's weapon whose file name contains one of these parts are muted while you reload by hand" );

@@ -3485,7 +3485,21 @@ static void R_VRScopeTrack( cl_entity_t *view )
 			}
 		}
 
-		for( int b = 0; b < hdr->numbones; b++ )
+		// the bone you named (vr_scope_bone) wins when the model has it
+		if( VR_ScopeBoneName()[0] )
+		{
+			for( int b = 0; b < hdr->numbones; b++ )
+			{
+				if( Q_stristr( pb[b].name, VR_ScopeBoneName( )))
+				{
+					best = b;
+					bestn = 1 << 30;
+					break;
+				}
+			}
+		}
+
+		for( int b = 0; b < hdr->numbones && bestn < ( 1 << 30 ); b++ )
 		{
 			if( !Q_strnicmp( pb[b].name, "l_", 2 ) || !Q_strnicmp( pb[b].name, "r_", 2 ))
 				continue;
@@ -3498,6 +3512,9 @@ static void R_VRScopeTrack( cl_entity_t *view )
 		}
 
 		r_scope_bone = best;
+
+		if( VR_ScopeDebug())
+			gEngfuncs.Con_Printf( "VR scope: %s follows bone %d '%s'\n", view->model->name, best, best >= 0 ? pb[best].name : "-" );
 	}
 
 	if( r_scope_bone < 0 )
@@ -3533,6 +3550,101 @@ static void R_VRScopeTrack( cl_entity_t *view )
 	R_Mat34Mul( tmp, g_studio.rotationmatrix, delta_local );
 	R_Mat34Mul( world, tmp, inv );
 	VR_ScopeSetDelta( world );
+
+	if( VR_ScopeDebug())
+	{
+		static double next;
+
+		if( gp_cl && gp_cl->time > next )
+		{
+			next = gp_cl->time + 1.0;
+			gEngfuncs.Con_Printf( "VR scope: moved %.1f %.1f %.1f from rest (rest pose seen: %d)\n", world[0][3], world[1][3], world[2][3], r_scope_have_rest );
+		}
+	}
+}
+
+
+/*
+=================
+vr_anim_list / vr_anim_toggle / vr_anim_reset: which animations of the weapon in your hand play.
+Shooting and reloading by default. Save the choice for the weapon with vr_weapon_save.
+=================
+*/
+static studiohdr_t *R_VRHeldHeader( void )
+{
+	if( !tr.viewent || !tr.viewent->model || tr.viewent->model->type != mod_studio )
+		return NULL;
+
+	return (studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, tr.viewent->model );
+}
+
+static void VR_AnimList_f( void )
+{
+	studiohdr_t *hdr = R_VRHeldHeader();
+
+	if( !hdr )
+	{
+		gEngfuncs.Con_Printf( "nothing in your hand\n" );
+		return;
+	}
+
+	gEngfuncs.Con_Printf( "%s (animations from number 24 up cannot be chosen individually)\n", tr.viewent->model->name );
+
+	for( int i = 0; i < hdr->numseq; i++ )
+	{
+		mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex) + i;
+
+		gEngfuncs.Con_Printf( "  %2d %s %s\n", i, VR_AnimPlays( i, sd->label ) ? "PLAYS" : "     ", sd->label );
+	}
+}
+
+static void VR_AnimToggle_f( void )
+{
+	studiohdr_t *hdr = R_VRHeldHeader();
+	int seq, mask;
+
+	if( !hdr || gEngfuncs.Cmd_Argc() < 2 )
+	{
+		gEngfuncs.Con_Printf( "usage: vr_anim_toggle <animation number> (numbers: vr_anim_list)\n" );
+		return;
+	}
+
+	seq = Q_atoi( gEngfuncs.Cmd_Argv( 1 ));
+	if( seq < 0 || seq >= hdr->numseq || seq >= 24 )
+	{
+		gEngfuncs.Con_Printf( "animation %d is not available\n", seq );
+		return;
+	}
+
+	mask = VR_AnimMask();
+	if( mask == 0 )
+	{
+		// start from what the names allow
+		for( int i = 0; i < hdr->numseq && i < 24; i++ )
+		{
+			mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex) + i;
+
+			if( VR_AnimPlays( i, sd->label )) mask |= 1 << i;
+		}
+	}
+
+	mask ^= 1 << seq;
+	if( mask == 0 ) mask = 1 << 23;	// nothing playing is a choice too: an animation that does not exist in the list
+	VR_AnimSetMask( mask );
+	VR_AnimList_f();
+}
+
+static void VR_AnimReset_f( void )
+{
+	VR_AnimSetMask( 0 );
+	gEngfuncs.Con_Printf( "animations back to the names in vr_anim_play\n" );
+}
+
+void VR_StudioCmds( void )
+{
+	gEngfuncs.Cmd_AddCommand( "vr_anim_list", VR_AnimList_f, "list the animations of the weapon in your hand and which ones play" );
+	gEngfuncs.Cmd_AddCommand( "vr_anim_toggle", VR_AnimToggle_f, "vr_anim_toggle <number>: let an animation of this weapon play, or hold it still" );
+	gEngfuncs.Cmd_AddCommand( "vr_anim_reset", VR_AnimReset_f, "this weapon's animations follow vr_anim_play again" );
 }
 
 /*
@@ -3850,6 +3962,7 @@ void R_RunViewmodelEvents( void )
 	{
 		cl_entity_t *view = RI.currententity;
 		vec3_t vr_origin, vr_angles, saved_origin, saved_angles;
+		qboolean was_pass = VR_BeginEventPose();
 		qboolean vr_hand = VR_GetViewModelPose( vr_origin, vr_angles );
 
 		if( vr_hand )
@@ -3871,6 +3984,8 @@ void R_RunViewmodelEvents( void )
 			r_vr_viewmodel = false;
 			r_vr_mirror = false;
 		}
+
+		VR_EndEventPose( was_pass );
 	}
 }
 
@@ -4014,18 +4129,27 @@ void R_DrawViewModel( void )
 			}
 			else if( view->curstate.sequence >= 0 && view->curstate.sequence < vhdr->numseq )
 			{
-				// idle and draw animations never play: the weapon holds one pose, so the aim stays steady
+				// only shooting and reloading play (vr_anim_play, or the weapon's own list): everything else (idle, draw,
+				// sprint, inspect, melee) holds the first idle pose, so the gun is steady and sprinting never moves it
 				mstudioseqdesc_t *cs = (mstudioseqdesc_t *)((byte *)vhdr + vhdr->seqindex) + view->curstate.sequence;
-				int ov = VR_AnimOverride( cs->label );
 
-				if( ov == 1 )
+				if( !VR_AnimPlays( view->curstate.sequence, cs->label ))
 				{
+					int idle = 0;
+
+					for( int i = 0; i < vhdr->numseq; i++ )
+					{
+						mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)vhdr + vhdr->seqindex) + i;
+
+						if( VR_IsIdleLabel( sd->label ))
+						{
+							idle = i;
+							break;
+						}
+					}
+
+					view->curstate.sequence = idle;
 					view->curstate.frame = 0.0f;
-					g_studio.interpolate = false;
-				}
-				else if( ov == 2 )
-				{
-					view->curstate.frame = 255.0f;
 					g_studio.interpolate = false;
 				}
 			}

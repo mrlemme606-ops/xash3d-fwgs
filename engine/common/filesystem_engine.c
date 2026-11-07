@@ -373,7 +373,27 @@ void FS_Init( void )
 		if( env )
 			Q_strncpy( gamedir, env, sizeof( gamedir ));
 		else
+		{
+			// Cry of Fear VR: started without -game, from the Cry of Fear folder: that is the game
+			char probe[MAX_SYSPATH];
+			FILE *f;
+
 			Q_strncpy( gamedir, host.default_gamedir, sizeof( gamedir )); // gamedir == basedir
+
+			Q_snprintf( probe, sizeof( probe ), "%s/cryoffear/liblist.gam", rootdir[0] ? rootdir : "." );
+			f = fopen( probe, "rb" );
+			if( !f )
+			{
+				Q_snprintf( probe, sizeof( probe ), "%s/cryoffear/gameinfo.txt", rootdir[0] ? rootdir : "." );
+				f = fopen( probe, "rb" );
+			}
+
+			if( f )
+			{
+				fclose( f );
+				Q_strncpy( gamedir, "cryoffear", sizeof( gamedir ));
+			}
+		}
 	}
 
 	FS_LoadProgs();

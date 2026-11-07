@@ -258,14 +258,15 @@ qboolean VR_CofActive( void )
 
 static struct
 {
-	qboolean	valid, omni;
+	qboolean	valid, omni, phone;
 	vec3_t		start, dir, spot;
 } hl;
 
-void VR_CofSetHandLight( qboolean valid, qboolean omni, const float *start, const float *dir, const float *spot )
+void VR_CofSetHandLight( qboolean valid, qboolean omni, qboolean phone, const float *start, const float *dir, const float *spot )
 {
 	hl.valid = valid && start && dir && spot;
 	hl.omni = omni;
+	hl.phone = phone;
 
 	if( hl.valid )
 	{
@@ -295,6 +296,15 @@ static void COF_Relight( void )
 
 		if( l[7] < now || l[3] <= 0.0f )
 			continue;
+
+		// the game leaves the phone's light on when you put the phone away. Nothing of it shines then: the spotlight
+		// (gfx/flashlight.tga, the weapons' tacklights use flashlight2.tga) and the small lights around you
+		if( !hl.phone && ( l[3] == 60.0f && !tex[0] || ( spot && Q_stristr( tex, "flashlight.tga" ))))
+		{
+			l[7] = 0.0f;
+			l[3] = 0.0f;
+			continue;
+		}
 
 		if( spot )
 		{
@@ -468,7 +478,7 @@ void VR_CofBeginFrame( void ) { }
 qboolean VR_CofFrameArmed( void ) { return false; }
 void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin ) { }
 void VR_CofEndFrame( void ) { }
-void VR_CofSetHandLight( qboolean valid, qboolean omni, const float *start, const float *dir, const float *spot ) { }
+void VR_CofSetHandLight( qboolean valid, qboolean omni, qboolean phone, const float *start, const float *dir, const float *spot ) { }
 
 static void VR_CofStatus_f( void )
 {

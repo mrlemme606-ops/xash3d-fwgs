@@ -1243,6 +1243,14 @@ set the view angle to this absolute value
 static void CL_ParseSetAngle( sizebuf_t *msg )
 {
 	MSG_ReadVec3Angles( msg, cl.viewangles );
+
+	// VR: the game turns the player to face something (a jump scare, a spawn). The headset already looks somewhere
+	// relative to the body, so the body turns by the difference: your head ends up facing that way
+	if( Cvar_VariableInteger( "vr_enable" ))
+	{
+		cl.viewangles[YAW] -= Cvar_VariableValue( "vr_in_head_yaw" );
+		cl.viewangles[PITCH] = 0.0f;
+	}
 }
 
 /*

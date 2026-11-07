@@ -968,7 +968,7 @@ rserr_t R_ChangeDisplaySettings( int width, int height, window_mode_t window_mod
 	// VR: the menus are laid out for the window, so always use the same one (launch option -vrwindow)
 	// -vrwindow [size]: a square window (size x size, default 1440), the same shape as a headset's view.
 	// each eye is copied out of it, so a bigger size means a sharper picture
-	if( Sys_CheckParm( "-vrwindow" ))
+	if( Sys_CheckParm( "-vrwindow" ) || ( GI && !Q_stricmp( GI->gamefolder, "cryoffear" ) && !Sys_CheckParm( "-novr" )))
 	{
 		char arg[16] = { 0 };
 		int size = 1440;

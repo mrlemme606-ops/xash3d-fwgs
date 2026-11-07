@@ -154,6 +154,8 @@ static CVAR_DEFINE_AUTO( vr_light_z, "0", 0, "where the light sits, above the ha
 static CVAR_DEFINE_AUTO( vr_scope, "1", FCVAR_ARCHIVE, "1 = rifle scope: lift the rifle to your eye and the scope shows a zoomed view" );
 static CVAR_DEFINE_AUTO( vr_scope_models, "rifle+sniper+hunting", 0, "weapon model names (separated by +) that have a scope" );
 static CVAR_DEFINE_AUTO( vr_scope_fov, "2", 0, "field of view of the scope image in degrees (smaller = more zoom, saved per weapon)" );
+static CVAR_DEFINE_AUTO( vr_scope_bone, "Object02", FCVAR_ARCHIVE, "part of the name of the rifle bone the scope lens follows (empty or not found = the bone with the most vertices)" );
+static CVAR_DEFINE_AUTO( vr_scope_debug, "0", 0, "1 = print which bone the scope follows and how far it moved" );
 static CVAR_DEFINE_AUTO( vr_scope_follow, "1", FCVAR_ARCHIVE, "1 = the scope lens moves with the rifle during reload animations" );
 static CVAR_DEFINE_AUTO( vr_scope_x, "0.4", 0, "scope eyepiece position, forward of the hand (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_scope_y, "-0.3", 0, "scope eyepiece position, left of the hand (saved per weapon)" );
@@ -210,6 +212,10 @@ static CVAR_DEFINE_AUTO( vr_vm_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the weapon 
 static CVAR_DEFINE_AUTO( vr_phone_light, "1", FCVAR_ARCHIVE, "1 = a spotlight shines from the weapons listed in vr_light_models, where your hand points" );
 static CVAR_DEFINE_AUTO( vr_light_models, "mobile+flashlight", 0, "weapon model names (part of the file name) that work as a flashlight. Separate with +" );
 static CVAR_DEFINE_AUTO( vr_light_distance, "700", FCVAR_ARCHIVE, "how far the flashlight reaches, in units" );
+static CVAR_DEFINE_AUTO( vr_hand_collide, "1", FCVAR_ARCHIVE, "1 = the weapon in your hand is pushed back by walls instead of going through them" );
+static CVAR_DEFINE_AUTO( vr_hand_reach, "18", FCVAR_ARCHIVE, "how far in front of the hand the weapon counts as touching a wall (units)" );
+static CVAR_DEFINE_AUTO( vr_anim_play, "shoot+fire+reload+shot", FCVAR_ARCHIVE, "animations of a weapon that play (part of the animation name, separated by +). All others hold the idle pose. A weapon can have its own choice (vr_anim_toggle, saved with vr_weapon_save)" );
+static CVAR_DEFINE_AUTO( vr_anim_mask, "0", 0, "animations that play for this weapon, as a number (bit per animation number). 0 = decided by the names in vr_anim_play" );
 static CVAR_DEFINE_AUTO( vr_empty_hand_seq, "8", FCVAR_ARCHIVE, "animation of the empty fist model (v_actions.mdl) that is shown when your hand is empty. -1 = whatever the game plays" );
 static CVAR_DEFINE_AUTO( vr_empty_hand_frame, "0", FCVAR_ARCHIVE, "frame of that animation" );
 static CVAR_DEFINE_AUTO( vr_vm_lock_seq, "-1", 0, "testing: show this animation sequence of the weapon model (-1 = normal). vr_vm_seqlist lists them" );
@@ -395,7 +401,12 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_static_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_freeze );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hand_collide );
+	gEngfuncs.Cvar_RegisterVariable( &vr_hand_reach );
+	gEngfuncs.Cvar_RegisterVariable( &vr_anim_play );
+	gEngfuncs.Cvar_RegisterVariable( &vr_anim_mask );
 	gEngfuncs.Cvar_RegisterVariable( &vr_empty_hand_seq );
+	VR_StudioCmds();
 	gEngfuncs.Cvar_RegisterVariable( &vr_empty_hand_frame );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_lock_seq );
 	gEngfuncs.Cvar_RegisterVariable( &vr_vm_lock_frame );
@@ -450,6 +461,8 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_models );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_fov );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_follow );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_bone );
+	gEngfuncs.Cvar_RegisterVariable( &vr_scope_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_x );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_y );
 	gEngfuncs.Cvar_RegisterVariable( &vr_scope_z );
@@ -1025,6 +1038,20 @@ qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles )
 	VectorMA( origin, -gy, bl, origin );
 	VectorMA( origin, -gz, bu, origin );
 
+	// the weapon cannot go through walls: when its front would be inside one, it is pushed back along its own axis.
+	// Only what you see moves, the aim still comes from the controller, so shots go where you point
+	if( vr_hand_collide.value )
+	{
+		vec3_t reach_end;
+		pmtrace_t wall;
+
+		VectorMA( vr.hand[1].pos, vr_hand_reach.value, bf, reach_end );
+		wall = gEngfuncs.CL_TraceLine( vr.hand[1].pos, reach_end, 0x00000008 /* PM_WORLD_ONLY */ );
+
+		if( !wall.startsolid && wall.fraction < 1.0f )
+			VectorMA( origin, -( 1.0f - wall.fraction ) * vr_hand_reach.value, bf, origin );
+	}
+
 	xy = sqrt( bf[0] * bf[0] + bf[1] * bf[1] );
 	pitch = RAD2DEG( atan2( -bf[2], xy ));
 	yaw = RAD2DEG( atan2( bf[1], bf[0] ));
@@ -1306,6 +1333,10 @@ qboolean VR_ViewModelBoneHidden( const char *bonename )
 {
 	qboolean hidden = VR_ListMatches( vr_left_pass ? vr_lhand_hide_bones.string : vr_vm_hide_bones.string, bonename, false );
 
+	// the flare model has a loose part (Object01) that floats beside it
+	if( VR_ContainsNoCase( vr_tune_model, "flare" ) && !Q_stricmp( bonename, "Object01" ))
+		return true;
+
 	// a weapon the game holds in the left hand: show its left arm (mirrored it becomes the right one), hide the other.
 	// What you put in vr_vm_hide_bones still hides those parts, only the default left arm entry is left out here
 	if( !vr_left_pass && VR_ViewModelMirror( ))
@@ -1530,12 +1561,14 @@ When you switch weapons they are restored, then vr_weapon_<model>.cfg is run if 
 "vr_weapon_save" writes that file for the weapon you are holding.
 =================
 */
+extern convar_t vr_rl_grip_radius;
+
 static convar_t *vr_tune_vars[] =
 {
 	&vr_vm_grip_x, &vr_vm_grip_y, &vr_vm_grip_z, &vr_vm_pitch, &vr_vm_yaw,
 	&vr_vm_roll, &vr_vm_flip_roll, &vr_vm_scale, &vr_hand_pitch, &vr_vm_arm_cut, &vr_vm_cut_pitch, &vr_vm_cut_yaw,
 	&vr_light_x, &vr_light_y, &vr_light_z, &vr_scope_x, &vr_scope_y, &vr_scope_z, &vr_scope_radius, &vr_scope_fov,
-	&vr_light_pitch, &vr_light_yaw, &vr_vm_mirror, &vr_aim_pitch, &vr_aim_yaw
+	&vr_light_pitch, &vr_light_yaw, &vr_vm_mirror, &vr_aim_pitch, &vr_aim_yaw, &vr_anim_mask, &vr_rl_grip_radius
 };
 
 #define VR_TUNE_COUNT ( (int)( sizeof( vr_tune_vars ) / sizeof( vr_tune_vars[0] )))
@@ -1606,7 +1639,7 @@ static const char *vr_builtin_profiles[][2] =
 	{ "v_switchblade", "vr_vm_grip_x 12\nvr_vm_grip_y -3\nvr_vm_grip_z -4.5\nvr_vm_pitch 0\nvr_vm_yaw 20\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 0.45\nvr_hand_pitch 60\nvr_vm_arm_cut 5\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_syringe", "vr_vm_grip_x 13\nvr_vm_grip_y -3\nvr_vm_grip_z -3\nvr_vm_pitch 50\nvr_vm_yaw 20\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 0.7\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_vp70", "vr_vm_grip_x 16\nvr_vm_grip_y -4\nvr_vm_grip_z -3\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 6\n" },
-	{ "v_wheelchair_browning", "vr_vm_grip_x 0\nvr_vm_grip_y 0\nvr_vm_grip_z -30\nvr_vm_pitch 0\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.7\nvr_hand_pitch 60\nvr_vm_arm_cut 6\n" },
+	{ "v_wheelchair_browning", "vr_vm_grip_x 17\nvr_vm_grip_y -4\nvr_vm_grip_z -4\nvr_vm_pitch 0\nvr_vm_yaw -10\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.7\nvr_hand_pitch 60\nvr_vm_arm_cut 6\n" },
 };
 
 // set the numbers of a built-in profile (cvar name and value per line)
@@ -1641,6 +1674,27 @@ static void VR_ApplyBuiltinProfile( const char *base )
 
 		return;
 	}
+}
+
+// does this animation play? Only shooting and reloading do, unless the weapon has its own list (vr_anim_mask)
+qboolean VR_AnimPlays( int seq, const char *label )
+{
+	int mask = (int)vr_anim_mask.value;
+
+	if( mask != 0 )
+		return seq >= 0 && seq < 24 && FBitSet( mask, 1 << seq );
+
+	return label && label[0] && VR_ListMatches( vr_anim_play.string, label, true );
+}
+
+int VR_AnimMask( void )
+{
+	return (int)vr_anim_mask.value;
+}
+
+void VR_AnimSetMask( int mask )
+{
+	gEngfuncs.Cvar_SetValue( "vr_anim_mask", mask );
 }
 
 // 0 = play the animation, 1 = hold its first frame, 2 = show its last frame
@@ -1966,7 +2020,7 @@ static void VR_UpdateHandLight( const ref_viewpass_t *game )
 	if( !vr_phone_light.value || !vr.hand[1].valid
 		|| !tr.viewent || !tr.viewent->model || Q_strcmp( tr.viewent->model->name, vr_tune_model ))
 	{
-		VR_CofSetHandLight( false, false, NULL, NULL, NULL );
+		VR_CofSetHandLight( false, false, false, NULL, NULL, NULL );
 		return;
 	}
 
@@ -1996,7 +2050,7 @@ static void VR_UpdateHandLight( const ref_viewpass_t *game )
 		VectorMA( end, -8.0f, dir, spot );
 	else VectorCopy( end, spot );
 
-	VR_CofSetHandLight( true, vr_vm_omni, start, dir, spot );
+	VR_CofSetHandLight( true, vr_vm_omni, VR_ContainsNoCase( vr_tune_model, "mobile" ), start, dir, spot );
 }
 
 /*
@@ -2252,6 +2306,22 @@ qboolean VR_GetEyeTarget( GLuint *fbo, int *width, int *height )
 	if( width ) *width = vr.eye_w;
 	if( height ) *height = vr.eye_h;
 	return true;
+}
+
+// the weapon events (muzzle flash, shells, tracers) are run before the eye pictures: they need the hand pose too
+qboolean VR_BeginEventPose( void )
+{
+	qboolean was = vr.in_eye_pass;
+
+	if( vr.initialized && vr_enable.value )
+		vr.in_eye_pass = true;
+
+	return was;
+}
+
+void VR_EndEventPose( qboolean was )
+{
+	vr.in_eye_pass = was;
 }
 
 qboolean VR_GetPassSize( int *width, int *height )
@@ -2536,6 +2606,16 @@ static float vr_scope_half_w = 0.28f;	// half the width of the middle square, as
 static float vr_scope_delta[3][4];
 static qboolean vr_scope_delta_ok;
 static double vr_scope_delta_time;
+
+const char *VR_ScopeBoneName( void )
+{
+	return vr_scope_bone.string;
+}
+
+qboolean VR_ScopeDebug( void )
+{
+	return vr_scope_debug.value != 0.0f;
+}
 
 void VR_ScopeSetDelta( const float m[3][4] )
 {

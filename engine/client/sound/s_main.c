@@ -710,6 +710,15 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
 	sfx = S_GetSfxByHandle( handle );
 	if( !sfx ) return;
 
+	// VR: climbing a ladder with the hands fires the ladder step sound many times a second
+	if( Q_stristr( sfx->name, "ladder" ))
+	{
+		static double last_ladder;
+
+		if( host.realtime - last_ladder < 0.28 ) return;
+		last_ladder = host.realtime;
+	}
+
 	if( S_VRMuted( ent, chan, sfx )) return;
 
 	vol = bound( 0, fvol * 255, 255 );
@@ -1677,7 +1686,22 @@ void S_UpdateFrame( struct ref_viewpass_s *rvp )
 		return;
 
 	VectorCopy( rvp->vieworigin, snd.origin );
-	AngleVectors( rvp->viewangles, snd.forward, snd.right, snd.up );
+
+	if( Cvar_VariableInteger( "vr_enable" ) && rvp->viewentity == cl.playernum + 1 )
+	{
+		// VR: sounds come from where they are around your head, so the listener faces where the headset faces,
+		// not where the body points
+		vec3_t head;
+
+		head[PITCH] = Cvar_VariableValue( "vr_in_head_pitch" );
+		head[YAW] = rvp->viewangles[YAW] + Cvar_VariableValue( "vr_in_head_yaw" );
+		head[ROLL] = 0.0f;
+		AngleVectors( head, snd.forward, snd.right, snd.up );
+	}
+	else
+	{
+		AngleVectors( rvp->viewangles, snd.forward, snd.right, snd.up );
+	}
 	snd.entnum = rvp->viewentity; // can be camera entity too
 }
 

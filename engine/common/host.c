@@ -1301,6 +1301,20 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 		break;
 	}
 
+	// Cry of Fear VR: started on its own, it simply is VR (add -novr for the flat game), with the keys the VR controls
+	// are made for. cof_force_binds 0 leaves your own binds alone
+	if( !Q_stricmp( GI->gamefolder, "cryoffear" ) && !Sys_CheckParm( "-novr" ))
+	{
+		Cbuf_AddText( "vr_enable 1\n" );
+
+		if( Cvar_Get( "cof_force_binds", "1", FCVAR_ARCHIVE, "1 = Cry of Fear starts with the default keys the VR controls use (w a s d, shift sprint, alt dodge, space, ctrl, e, r, z, tab, b, mouse1)" )->value )
+		{
+			Cbuf_AddText( "bind w +forward\nbind s +back\nbind a +moveleft\nbind d +moveright\n"
+				"bind shift +sprint\nbind alt +dodge\nbind space +jump\nbind ctrl +duck\nbind e +use\n"
+				"bind mouse1 +attack\nbind r +reload\nbind z weapontoggle\nbind tab +inventory\nbind b +objectives\n" );
+		}
+	}
+
 	host.change_game = false;	// done
 	Cbuf_ExecStuffCmds();	// execute stuffcmds (commandline)
 	SCR_CheckStartupVids();	// must be last

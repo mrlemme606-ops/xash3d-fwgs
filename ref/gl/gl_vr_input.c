@@ -81,6 +81,32 @@ void VR_InputPoll( float head_yaw_relative, float head_pitch, qboolean physical_
 	if( !sys )
 		return;
 
+	// short vibrations the engine asks for with the cvar vr_in_haptic: 100 * hand (0 left, 1 right) + number of pulses
+	{
+		static cvar_t *req;
+		static int pending, pulse_hand;
+		static double next_pulse;
+
+		if( !req ) req = gEngfuncs.pfnGetCvarPointer( "vr_in_haptic" );
+
+		if( req && req->value >= 1.0f )
+		{
+			int v = (int)req->value;
+
+			gEngfuncs.Cvar_SetValue( "vr_in_haptic", 0.0f );
+			pulse_hand = bound( 0, v / 100, 1 );
+			pending = bound( 1, v % 100, 8 );
+			next_pulse = 0.0;
+		}
+
+		if( pending > 0 && gp_cl && gp_cl->time >= next_pulse && vr_devices[pulse_hand] != VR_DEVICE_INVALID )
+		{
+			sys->TriggerHapticPulse( vr_devices[pulse_hand], 0, 1800 );
+			pending--;
+			next_pulse = gp_cl->time + 0.16;
+		}
+	}
+
 	memset( &left, 0, sizeof( left ));
 	memset( &right, 0, sizeof( right ));
 
