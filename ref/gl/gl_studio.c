@@ -145,6 +145,10 @@ static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
 static void R_VRScopeTrack( cl_entity_t *view );
 static qboolean r_vr_mirror;		// the weapon is drawn mirrored (a left-handed weapon held in the right hand)
+static qboolean r_dual_on;	// the left weapon of a dual wield is being drawn: it is placed at the left hand
+static char r_dual_name[64];
+static vec3_t r_dual_origin, r_dual_angles;
+static int r_dual_hits;
 static qboolean r_force_builtin;	// the left weapon of a dual wield: draw it with this renderer
 static qboolean r_vr_viewmodel;	// the weapon is being drawn at the VR hand
 static cl_entity_t vr_lhand_ent;	// the universal left hand
@@ -3354,6 +3358,15 @@ static int R_StudioDrawModel( int flags )
 
 	R_StudioSetHeader((studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, RI.currentmodel ));
 
+	// VR dual wield: whatever the game worked out for the position of its second weapon, it is put at the left hand here,
+	// right before the model is placed. (The game turns the view pitch into the model's pitch the other way round)
+	if( r_dual_on && RI.currententity != tr.viewent && RI.currententity->model && !Q_stricmp( RI.currententity->model->name, r_dual_name ))
+	{
+		VectorCopy( r_dual_origin, RI.currententity->origin );
+		VectorCopy( r_dual_angles, RI.currententity->angles );
+		r_dual_hits++;
+	}
+
 	R_StudioSetUpTransform( RI.currententity );
 
 	if( flags & STUDIO_RENDER )
@@ -3664,6 +3677,29 @@ void VR_StudioCmds( void )
 	gEngfuncs.Cmd_AddCommand( "vr_anim_list", VR_AnimList_f, "list the animations of the weapon in your hand and which ones play" );
 	gEngfuncs.Cmd_AddCommand( "vr_anim_toggle", VR_AnimToggle_f, "vr_anim_toggle <number>: let an animation of this weapon play, or hold it still" );
 	gEngfuncs.Cmd_AddCommand( "vr_anim_reset", VR_AnimReset_f, "this weapon's animations follow vr_anim_play again" );
+}
+
+// on: draw the second weapon of a dual wield at this place (origin, view-style angles: pitch down is positive)
+void R_StudioSetDualPose( qboolean on, const char *model, const float *origin, const float *vang )
+{
+	r_dual_on = on;
+
+	if( !on )
+		return;
+
+	Q_strncpy( r_dual_name, model, sizeof( r_dual_name ));
+	VectorCopy( origin, r_dual_origin );
+	r_dual_angles[0] = -vang[0];
+	r_dual_angles[1] = vang[1];
+	r_dual_angles[2] = vang[2];
+}
+
+int R_StudioDualHits( void )
+{
+	int n = r_dual_hits;
+
+	r_dual_hits = 0;
+	return n;
 }
 
 void R_StudioForceBuiltin( qboolean on )

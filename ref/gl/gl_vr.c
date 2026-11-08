@@ -226,6 +226,7 @@ static CVAR_DEFINE_AUTO( vr_muzzle_x, "0", FCVAR_ARCHIVE, "where the muzzle flas
 static CVAR_DEFINE_AUTO( vr_muzzle_y, "0", FCVAR_ARCHIVE, "muzzle: sideways" );
 static CVAR_DEFINE_AUTO( vr_muzzle_z, "0", FCVAR_ARCHIVE, "muzzle: up" );
 static CVAR_DEFINE_AUTO( vr_dual_own, "1", FCVAR_ARCHIVE, "1 = hide the game's own picture of the left weapon in the dual wield (the one in front of your body) and show only the one on your hand" );
+static CVAR_DEFINE_AUTO( vr_dual_debug, "0", 0, "1 = print once a second whether the left weapon of a dual wield was placed at your hand" );
 static CVAR_DEFINE_AUTO( vr_dual_builtin, "1", FCVAR_ARCHIVE, "1 = the left weapon of a dual wield is drawn by the engine's own studio renderer (it then turns with your hand). 0 = the game's renderer" );
 static CVAR_DEFINE_AUTO( vr_hand_collide, "0", 0, "1 = the weapon in your hand is pushed back by walls instead of going through them" );
 static CVAR_DEFINE_AUTO( vr_hand_reach, "18", FCVAR_ARCHIVE, "how far in front of the hand the weapon counts as touching a wall (units)" );
@@ -434,6 +435,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_collide );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_builtin );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_own );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_anim_play );
@@ -1924,8 +1926,26 @@ void VR_DrawDualWeapon( void )
 	// the engine's own studio renderer honours the angles we give; the game's renderer for this second weapon
 	// followed the arm but did not turn with the hand
 	R_StudioForceBuiltin( vr_dual_builtin.value != 0.0f );
+	R_StudioSetDualPose( true, model, origin, vang );
 	VR_CofDrawDual( origin, vang );
+	R_StudioSetDualPose( false, model, origin, vang );
 	R_StudioForceBuiltin( false );
+
+	if( vr_dual_debug.value )
+	{
+		static double next;
+		static int hits;
+
+		hits += R_StudioDualHits();
+
+		if( ( gp_cl ? gp_cl->time : 0.0 ) >= next )
+		{
+			gEngfuncs.Con_Printf( "VR dual: model %s, hand origin %.0f %.0f %.0f, angles %.0f %.0f %.0f, placed by the studio hook %d times in the last second\n",
+				model, origin[0], origin[1], origin[2], vang[0], vang[1], vang[2], hits );
+			hits = 0;
+			next = ( gp_cl ? gp_cl->time : 0.0 ) + 1.0;
+		}
+	}
 
 	pglPopMatrix();
 	pglDepthRange( gldepthmin, gldepthmax );

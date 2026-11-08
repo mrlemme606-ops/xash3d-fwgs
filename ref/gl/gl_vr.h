@@ -107,6 +107,8 @@ typedef struct
 void VR_ReloadInitCvars( void );
 qboolean VR_LeftGripping( void );
 void R_StudioForceBuiltin( qboolean on );
+void R_StudioSetDualPose( qboolean on, const char *model, const float *origin, const float *vang );
+int R_StudioDualHits( void );
 void VR_ReloadTick( void );
 void VR_ReloadSetGunPose( const vec3_t origin, const vec3_t angles, float scale );
 void VR_ReloadObserve( const char *label, float animtime );
