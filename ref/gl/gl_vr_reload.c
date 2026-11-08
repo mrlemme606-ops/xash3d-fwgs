@@ -833,9 +833,9 @@ void VR_ReloadTick( void )
 		{
 			rl.twohand = true;
 
-			// the left hand feels the gun: two firm pulses
-			gEngfuncs.Cvar_SetValue( "vr_in_haptic_len", 2600.0f );
-			gEngfuncs.Cvar_SetValue( "vr_in_haptic", 2.0f );	// 100 * 0 (left hand) + 2 pulses
+			// the left hand feels the gun: one short, light pulse
+			gEngfuncs.Cvar_SetValue( "vr_in_haptic_len", 900.0f );
+			gEngfuncs.Cvar_SetValue( "vr_in_haptic", 1.0f );	// 100 * 0 (left hand) + 1 short pulse
 		}
 
 		near_gun = close || rl.twohand;

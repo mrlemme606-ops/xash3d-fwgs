@@ -125,6 +125,7 @@ static CVAR_DEFINE_AUTO( vr_enable, "0", 0, "enable SteamVR (OpenVR) stereo rend
 static CVAR_DEFINE_AUTO( vr_worldscale, "39.37", 0, "game units per meter (GoldSrc: 1 unit = 1 inch)" );
 static CVAR_DEFINE_AUTO( vr_flip_roll, "0", 0, "set to 1 if head roll is inverted" );
 static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotation only), useful for diagnosing warping" );
+static CVAR_DEFINE_AUTO( vr_sym_proj, "1", FCVAR_ARCHIVE, "1 = draw each eye with a centred (symmetric) camera like the normal game and let SteamVR crop the part your lens needs. The game's own water, glass and sky effects assume a centred camera and warp otherwise. 0 = the headset's off-centre frustum" );
 static CVAR_DEFINE_AUTO( vr_flip_vfov, "1", FCVAR_ARCHIVE, "diagnostic: swap the up and down field of view. Try 1 if what is drawn sits a little too low or high compared to the menu pointer" );
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.30", FCVAR_ARCHIVE, "meters below your recentered height that count as physically crouching (you stand up again at 60% of this)" );
@@ -283,6 +284,8 @@ static struct
 	vec3_t		axis_fwd, axis_left, axis_up;	// current head basis in game axes (unrotated)
 
 	float		cur_frustum[4];
+	float		sym_tan_x, sym_tan_y;
+	float		eye_bounds[2][4];	// what part of the (centred) picture the lens needs: uMin, uMax, vMin, vMax
 
 	vec3_t		game_origin;	// game eye position of the current frame
 	vec3_t		test_origin;	// where the diagnostic room is anchored
@@ -393,6 +396,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_positional );
 	gEngfuncs.Cvar_RegisterVariable( &vr_fov_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_flip_vfov );
+	gEngfuncs.Cvar_RegisterVariable( &vr_sym_proj );
 	gEngfuncs.Cvar_RegisterVariable( &vr_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_draw_hands );
@@ -1003,7 +1007,12 @@ static void VR_PublishUI( void )
 			&& VR_UIRayHit( vr.hand[0].origin_t, vr.hand[0].dir_t, &lu, &lv, &ld );
 
 		gEngfuncs.Cvar_SetValue( "vr_in_ui_lhit", lhit ? 1.0f : 0.0f );
-		VR_UISetPointerLeft( lhit, lu, lv );
+		{
+			static cvar_t *lkbd;
+
+			if( !lkbd ) lkbd = gEngfuncs.pfnGetCvarPointer( "vr_in_ui_lkbd" );
+			VR_UISetPointerLeft( lhit && lkbd && lkbd->value > 0.5f, lu, lv );
+		}
 
 		if( lhit )
 		{
@@ -2816,6 +2825,15 @@ void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 	out->fov_x = 2.0f * RAD2DEG( atan( tan_x ));
 	out->fov_y = 2.0f * RAD2DEG( atan( tan_y ));
 
+	vr.sym_tan_x = tan_x;
+	vr.sym_tan_y = tan_y;
+
+	// the part of the centred picture that is the headset's real frustum (see vr_sym_proj)
+	vr.eye_bounds[eye & 1][0] = ( vr.cur_frustum[0] + tan_x ) / ( 2.0f * tan_x );
+	vr.eye_bounds[eye & 1][1] = ( vr.cur_frustum[1] + tan_x ) / ( 2.0f * tan_x );
+	vr.eye_bounds[eye & 1][2] = ( vr.cur_frustum[3] + tan_y ) / ( 2.0f * tan_y );
+	vr.eye_bounds[eye & 1][3] = ( vr.cur_frustum[2] + tan_y ) / ( 2.0f * tan_y );
+
 	vr.cur_eye = eye;
 	vr.in_eye_pass = true;
 
@@ -2846,6 +2864,15 @@ qboolean VR_GetEyeFrustum( float *left, float *right, float *up, float *down )
 {
 	if( !vr.in_eye_pass )
 		return false;
+
+	if( vr_sym_proj.value )
+	{
+		*left = -vr.sym_tan_x;
+		*right = vr.sym_tan_x;
+		*up = vr.sym_tan_y;
+		*down = -vr.sym_tan_y;
+		return true;
+	}
 
 	*left = vr.cur_frustum[0];
 	*right = vr.cur_frustum[1];
@@ -3632,6 +3659,14 @@ void VR_FinishFrame( void )
 		bounds.uMax = 1.0f;
 		bounds.vMin = 0.0f;
 		bounds.vMax = 1.0f;
+
+		if( vr_sym_proj.value && !pure && vr.sym_tan_x > 0.0f && vr.sym_tan_y > 0.0f )
+		{
+			bounds.uMin = bound( 0.0f, vr.eye_bounds[eye][0], 1.0f );
+			bounds.uMax = bound( 0.0f, vr.eye_bounds[eye][1], 1.0f );
+			bounds.vMin = bound( 0.0f, vr.eye_bounds[eye][2], 1.0f );
+			bounds.vMax = bound( 0.0f, vr.eye_bounds[eye][3], 1.0f );
+		}
 
 		err = vr.compositor->Submit( eye, &tex, &bounds, VR_SUBMIT_DEFAULT );
 

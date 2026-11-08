@@ -41,6 +41,7 @@ static CVAR_DEFINE_AUTO( vr_in_hand_valid, "0", 0, "(internal) right hand is tra
 static CVAR_DEFINE_AUTO( vr_in_hand_yaw, "0", 0, "(internal) aim yaw toward the right hand's target, relative to the body" );
 static CVAR_DEFINE_AUTO( vr_in_hand_pitch, "0", 0, "(internal) aim pitch toward the right hand's target" );
 static CVAR_DEFINE_AUTO( vr_in_ui_hit, "0", 0, "(internal) the right hand points at the UI panel" );
+static CVAR_DEFINE_AUTO( vr_in_ui_lkbd, "0", 0, "(internal) the left hand points at a key of the computer keyboard" );
 static CVAR_DEFINE_AUTO( vr_in_ui_lhit, "0", 0, "(internal) the left hand points at the UI panel" );
 static CVAR_DEFINE_AUTO( vr_in_ui_lx, "0", 0, "(internal) left hand: where on the UI panel, 0..1 from the left" );
 static CVAR_DEFINE_AUTO( vr_in_ui_ly, "0", 0, "(internal) left hand: where on the UI panel, 0..1 from the top" );
@@ -305,8 +306,21 @@ void IN_VRDrawKeyboard( void )
 	rgba_t white = { 255, 255, 255, 255 };
 	static cl_font_t kbd_font;
 
+	int lpx = (int)( vr_in_ui_lx.value * refState.width ), lpy = (int)( vr_in_ui_ly.value * refState.height ), lch = 0;
+	qboolean lhit_kbd;
+
 	if( !IN_VRKbdShown( ))
+	{
+		if( vr_in_ui_lkbd.value > 0.5f )
+			Cvar_DirectSetValue( &vr_in_ui_lkbd, 0.0f );
 		return;
+	}
+
+	// the left hand's cursor only exists over the keyboard
+	lhit_kbd = vr_in_ui_lhit.value > 0.5f && IN_VRKbdHit( lpx, lpy, &lch );
+
+	if(( vr_in_ui_lkbd.value > 0.5f ) != lhit_kbd )
+		Cvar_DirectSetValue( &vr_in_ui_lkbd, lhit_kbd ? 1.0f : 0.0f );
 
 	// the letters get a font of their own, three times the size
 	if( !kbd_font.valid && cls.creditsFont.rendermode )
@@ -327,6 +341,9 @@ void IN_VRDrawKeyboard( void )
 			int x = x0 + col * c, y = y0 + row * c;
 			int lw = 0, lh = 0;
 			int over = hit && k->label && vr_cursor_px >= x && vr_cursor_px < x + c && vr_cursor_py >= y && vr_cursor_py < y + c;
+
+			if( lhit_kbd && k->label && lpx >= x && lpx < x + c && lpy >= y && lpy < y + c )
+				over = true;
 
 			if( !k->label )
 				continue;
@@ -426,13 +443,25 @@ void IN_VRUserMsg( const char *name, const byte *buf, int size )
 	{
 		int weapon = buf[1], clip = (signed char)buf[2];
 
-		if( weapon == last_weapon && last_clip >= 0 && clip >= 0 && clip < last_clip )
+		// the clip of every weapon is remembered on its own: the first shot after taking a weapon out used to be
+		// missed when the game announced another weapon in between
+		static int clip_of[256];
+		static qboolean clip_known[256];
+		int before = ( clip_known[weapon & 255] ) ? clip_of[weapon & 255] : last_clip;
+
+		if( before >= 0 && clip >= 0 && clip < before && ( weapon == last_weapon || clip_known[weapon & 255] ))
 		{
 			double gap = host.realtime - last_shot;
 
 			Cvar_DirectSetValue( &vr_in_haptic_len, gap < 0.15 ? 1200.0f : ( gap < 0.5 ? 2600.0f : 3999.0f ));
 			Cvar_DirectSetValue( &vr_in_haptic, 101.0f );
 			last_shot = host.realtime;
+		}
+
+		if( clip >= 0 )
+		{
+			clip_of[weapon & 255] = clip;
+			clip_known[weapon & 255] = true;
 		}
 
 		last_weapon = weapon;
@@ -493,6 +522,7 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_hand_pitch );
 	Cvar_RegisterVariable( &vr_in_ui_hit );
 	Cvar_RegisterVariable( &vr_in_ui_lhit );
+	Cvar_RegisterVariable( &vr_in_ui_lkbd );
 	Cvar_RegisterVariable( &vr_in_ui_lx );
 	Cvar_RegisterVariable( &vr_in_ui_ly );
 	Cvar_RegisterVariable( &vr_in_ui_x );
@@ -650,11 +680,7 @@ static void IN_VRUpdateButtons( int buttons )
 					continue;
 				}
 
-				Platform_SetMousePos( lx, ly );
-				VGui_MouseMove( lx, ly );
-				UI_MouseMove( lx, ly );
-				IN_VRSendKey( K_MOUSE1, true );
-				vr_lclick_down = true;
+				// anywhere else the left hand does nothing: the right hand is the cursor of every screen
 				continue;
 			}
 
