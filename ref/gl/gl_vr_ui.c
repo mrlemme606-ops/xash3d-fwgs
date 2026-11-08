@@ -67,14 +67,16 @@ static struct
 } ui;
 
 // the dot that shows where the hand points, a second overlay above the panel
-static struct
+typedef struct
 {
 	VROverlayHandle_t	handle;
 	qboolean		created, failed, shown;
 	qboolean		want;
 	float			u, v;
 	GLuint			tex;
-} dot;
+} vr_dot_t;
+
+static vr_dot_t dots[2];	// 0 = right hand, 1 = left hand: both are the same blue dot
 
 // the HUD (health, ammo...) shown on the back of the right hand
 static struct
@@ -88,6 +90,7 @@ static struct
 static void VR_UIUpdateHUD( void );
 
 static void VR_UIUpdatePointer( const HmdMatrix34_t *panel );
+static void VR_UIUpdateOnePointer( const HmdMatrix34_t *panel, int idx );
 
 void VR_UIInitCvars( void )
 {
@@ -421,13 +424,20 @@ static void VR_UIUpdateHUD( void )
 
 void VR_UISetPointer( qboolean visible, float u, float v )
 {
-	dot.want = visible;
-	dot.u = u;
-	dot.v = v;
+	dots[0].want = visible;
+	dots[0].u = u;
+	dots[0].v = v;
+}
+
+void VR_UISetPointerLeft( qboolean visible, float u, float v )
+{
+	dots[1].want = visible;
+	dots[1].u = u;
+	dots[1].v = v;
 }
 
 // a small round marker: bright centre, dark outline, see-through outside
-static void VR_UIDotTexture( void )
+static void VR_UIDotTexture( vr_dot_t *dot )
 {
 	byte pix[64 * 64 * 4];
 	int x, y;
@@ -445,8 +455,8 @@ static void VR_UIDotTexture( void )
 		}
 	}
 
-	pglGenTextures( 1, &dot.tex );
-	pglBindTexture( GL_TEXTURE_2D, dot.tex );
+	pglGenTextures( 1, &dot->tex );
+	pglBindTexture( GL_TEXTURE_2D, dot->tex );
 	pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
 	pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
 	pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
@@ -456,60 +466,67 @@ static void VR_UIDotTexture( void )
 	glState.currentTexturesIndex[glState.activeTMU] = -1;
 }
 
-static void VR_UIUpdatePointer( const HmdMatrix34_t *panel )
+static void VR_UIUpdateOnePointer( const HmdMatrix34_t *panel, int idx )
 {
+	vr_dot_t *dot = &dots[idx];
 	HmdMatrix34_t m;
 	Texture_t tex;
 	float ox, oy;
 	int i;
 
-	if( dot.failed )
+	if( dot->failed )
 		return;
 
-	if( vr_ui_pointer.value <= 0.0f || !dot.want )
+	if( vr_ui_pointer.value <= 0.0f || !dot->want )
 	{
-		if( dot.shown )
+		if( dot->shown )
 		{
-			ui.overlay->HideOverlay( dot.handle );
-			dot.shown = false;
+			ui.overlay->HideOverlay( dot->handle );
+			dot->shown = false;
 		}
 
 		return;
 	}
 
-	if( !dot.created )
+	if( !dot->created )
 	{
-		if( ui.overlay->CreateOverlay( (char *)"xash3d.cof.pointer", (char *)"Cry of Fear UI pointer", &dot.handle ) != EVROverlayError_VROverlayError_None )
+		if( ui.overlay->CreateOverlay( (char *)( idx ? "xash3d.cof.pointer.left" : "xash3d.cof.pointer" ), (char *)"Cry of Fear UI pointer", &dot->handle ) != EVROverlayError_VROverlayError_None )
 		{
-			dot.failed = true;
+			dot->failed = true;
 			return;
 		}
 
-		VR_UIDotTexture();
-		ui.overlay->SetOverlaySortOrder( dot.handle, 10 );	// above the panel
-		tex.handle = (void *)(uintptr_t)dot.tex;
+		VR_UIDotTexture( dot );
+		ui.overlay->SetOverlaySortOrder( dot->handle, 10 + idx );	// above the panel
+		tex.handle = (void *)(uintptr_t)dot->tex;
 		tex.eType = (ETextureType)1;
 		tex.eColorSpace = (EColorSpace)1;
-		ui.overlay->SetOverlayTexture( dot.handle, &tex );
-		dot.created = true;
+		ui.overlay->SetOverlayTexture( dot->handle, &tex );
+		dot->created = true;
 	}
 
 	// on the panel where the ray hits, a little toward the viewer so it never sinks into the panel
-	ox = ( dot.u - 0.5f ) * ui.w;
-	oy = ( dot.v - 0.5f ) * ui.h;
+	ox = ( dot->u - 0.5f ) * ui.w;
+	oy = ( dot->v - 0.5f ) * ui.h;
 	m = *panel;
 
 	for( i = 0; i < 3; i++ )
 		m.m[i][3] = panel->m[i][3] + panel->m[i][0] * ox + panel->m[i][1] * oy + panel->m[i][2] * 0.012f;
 
-	ui.overlay->SetOverlayWidthInMeters( dot.handle, vr_ui_pointer.value );
-	ui.overlay->SetOverlayTransformAbsolute( dot.handle, (ETrackingUniverseOrigin)1, &m );
+	ui.overlay->SetOverlayWidthInMeters( dot->handle, vr_ui_pointer.value );
+	ui.overlay->SetOverlayTransformAbsolute( dot->handle, (ETrackingUniverseOrigin)1, &m );
 
-	if( !dot.shown )
+	if( !dot->shown )
 	{
-		ui.overlay->ShowOverlay( dot.handle );
-		dot.shown = true;
+		ui.overlay->ShowOverlay( dot->handle );
+		dot->shown = true;
 	}
+}
+
+static void VR_UIUpdatePointer( const HmdMatrix34_t *panel )
+{
+	VR_UIUpdateOnePointer( panel, 0 );
+	VR_UIUpdateOnePointer( panel, 1 );
 }
 
 /*

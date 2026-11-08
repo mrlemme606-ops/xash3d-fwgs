@@ -521,13 +521,7 @@ R_FindViewLeaf
 void R_FindViewLeaf( void )
 {
 	RI.oldviewleaf = RI.viewleaf;
-	{
-		vec3_t pvs_origin;
-
-		if( VR_GetPvsOrigin( pvs_origin ))
-			RI.viewleaf = gEngfuncs.Mod_PointInLeaf( pvs_origin, WORLDMODEL->nodes, WORLDMODEL );
-		else RI.viewleaf = gEngfuncs.Mod_PointInLeaf( RI.rvp.vieworigin, WORLDMODEL->nodes, WORLDMODEL );
-	}
+	RI.viewleaf = gEngfuncs.Mod_PointInLeaf( RI.rvp.vieworigin, WORLDMODEL->nodes, WORLDMODEL );
 }
 
 /*

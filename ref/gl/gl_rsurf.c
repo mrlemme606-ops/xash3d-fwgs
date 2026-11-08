@@ -14,6 +14,7 @@ GNU General Public License for more details.
 */
 
 #include "gl_local.h"
+#include "gl_vr.h"
 #include "xash3d_mathlib.h"
 #include "mod_local.h"
 #include "atlas.h"
@@ -3786,7 +3787,36 @@ void R_MarkLeaves( void )
 			force = true;
 	}
 
-	if( RI.viewleaf == RI.oldviewleaf && RI.viewleaf != NULL && !force )
+	// VR: the visible set is the merge of several places (see VR_GetPvsOrigins). It is only kept from the last picture when
+	// every one of those places is still where it was
+	vec3_t vr_pvs[3];
+	int vr_pvs_n = VR_GetPvsOrigins( vr_pvs );
+
+	if( vr_pvs_n )
+	{
+		static vec3_t last[4];
+		static int last_n;
+		qboolean same = ( last_n == vr_pvs_n + 1 ) && RI.viewleaf == RI.oldviewleaf && RI.viewleaf != NULL && !force;
+
+		for( int i = 0; same && i < vr_pvs_n + 1; i++ )
+		{
+			const float *o = ( i == 0 ) ? RI.rvp.vieworigin : vr_pvs[i - 1];
+
+			if( fabsf( o[0] - last[i][0] ) > 0.5f || fabsf( o[1] - last[i][1] ) > 0.5f || fabsf( o[2] - last[i][2] ) > 0.5f )
+				same = false;
+		}
+
+		if( same )
+			return;
+
+		VectorCopy( RI.rvp.vieworigin, last[0] );
+
+		for( int i = 0; i < vr_pvs_n; i++ )
+			VectorCopy( vr_pvs[i], last[i + 1] );
+
+		last_n = vr_pvs_n + 1;
+	}
+	else if( RI.viewleaf == RI.oldviewleaf && RI.viewleaf != NULL && !force )
 		return;
 
 	// development aid to let you run around
@@ -3802,6 +3832,9 @@ void R_MarkLeaves( void )
 	gEngfuncs.R_FatPVS( RI.rvp.vieworigin, r_pvs_radius->value, RI.visbytes, false, novis );
 	if( force && !novis )
 		gEngfuncs.R_FatPVS( test, r_pvs_radius->value, RI.visbytes, true, novis );
+
+	for( int i = 0; i < vr_pvs_n && !novis; i++ )
+		gEngfuncs.R_FatPVS( vr_pvs[i], r_pvs_radius->value, RI.visbytes, true, novis );
 
 	for( int i = 0; i < WORLDMODEL->numleafs; i++ )
 	{

@@ -300,17 +300,6 @@ void IN_VRDrawKeyboard( void )
 {
 	IN_VRDrawQuickSlots();
 
-	// the left hand's cursor, always there next to the right one while a screen is open
-	if( Cvar_VariableInteger( "vr_enable" ) && vr_in_menu.value > 0.5f && vr_in_ui_lhit.value > 0.5f && cls.key_dest != key_console )
-	{
-		int lx = (int)( vr_in_ui_lx.value * refState.width ), ly = (int)( vr_in_ui_ly.value * refState.height );
-
-		ref.dllFuncs.R_Set2DMode( true );
-		ref.dllFuncs.FillRGBA( kRenderTransTexture, lx - 9, ly - 1, 18, 3, 255, 200, 40, 255 );
-		ref.dllFuncs.FillRGBA( kRenderTransTexture, lx - 1, ly - 9, 3, 18, 255, 200, 40, 255 );
-	}
-
-
 	int x0, y0, c, row, col, ch;
 	qboolean hit;
 	rgba_t white = { 255, 255, 255, 255 };
@@ -612,13 +601,21 @@ static void IN_VRUpdateButtons( int buttons )
 			// old saved values: the right stick was empty or "!special" (not the right command), Y was "i"
 			// dual wield: the left trigger fires the left weapon (the game's secondary attack, mouse 2). A melee weapon there
 			// is only swung, never fired from the trigger
-			if( i == VRB_LTRIGGER && vr_in_dual.value > 0.5f && cls.key_dest == key_game )
+			if( i == VRB_LTRIGGER && vr_in_dual.value > 0.5f && cls.key_dest == key_game && vr_in_menu.value < 0.5f )
 			{
 				if( vr_in_dual_lmelee.value > 0.5f )
 					continue;
 
-				ks = "mouse2";
+				// seen in the game: while dual wielding mouse 1 fires the weapon the game draws on the LEFT and mouse 2 the one
+				// on the right, so each trigger sends the key of the weapon in its own hand
+				ks = "mouse1";
 			}
+			else if( i == VRB_RTRIGGER && vr_in_dual.value > 0.5f && cls.key_dest == key_game && vr_in_menu.value < 0.5f )
+				ks = "mouse2";
+
+			// swings (melee, fists, pistol whip) attack with the weapon of the hand that swung
+			if(( i == VRB_SWING || i == VRB_WHIP || i == VRB_FIST ) && vr_in_dual.value > 0.5f && cls.key_dest == key_game )
+				ks = ( host.realtime < vr_lswing_until && host.realtime >= vr_swing_until ) ? "mouse1" : "mouse2";
 
 			if( i == VRB_RSTICK && ( !ks[0] || !Q_strcmp( ks, "!special" )))
 				ks = "!weapontoggle";
@@ -662,7 +659,8 @@ static void IN_VRUpdateButtons( int buttons )
 			}
 
 			// a melee weapon only attacks when it is swung, never from the trigger
-			if( i == VRB_RTRIGGER && vr_in_melee.value > 0.5f && cls.key_dest == key_game )
+			// (but never while a screen with a cursor is open: the inventory and the computer need the trigger to click)
+			if( i == VRB_RTRIGGER && vr_in_melee.value > 0.5f && cls.key_dest == key_game && vr_in_menu.value < 0.5f )
 				continue;
 
 			// the computer's keyboard: a click on a key types it, and the game never sees that click
@@ -903,7 +901,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	// Right hand: the weapon in it (melee weapon, a gun for a pistol whip, fists). Left hand: punches, when the right hand holds
 	// a one handed item or nothing, or the left weapon of a dual wield
 	{
-		qboolean right_ok = vr_in_melee.value > 0.5f || !COM_StringEmptyOrNULL( vr_key_whip.string );
+		qboolean right_ok = vr_in_melee.value > 0.5f || ( !COM_StringEmptyOrNULL( vr_key_whip.string ) && vr_in_dual.value < 0.5f );
 		qboolean left_ok = vr_in_fists.value > 0.5f || vr_in_oneh.value > 0.5f || ( vr_in_dual.value > 0.5f && vr_in_dual_lmelee.value > 0.5f );
 		float thr = vr_melee_speed.value;
 
@@ -1356,19 +1354,26 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			// A full push sends a huge command, so the game's own maximum is reached (what the keys give). The speed that
 			// shows up then is remembered, separately for forward/back and for sideways, and a smaller push is that fraction
 			// of it: a gentle push is a gentle walk, a full push is a full walk
-			static float top_f = 250.0f, top_s = 250.0f;
+			// one speed for every direction: the stick's direction is kept, only its length is scaled. (Before, forward and
+			// sideways had their own numbers and the diagonals fell between them: forward-left was slow)
+			static float top = 250.0f;
 			float speed = clgame.pmove ? sqrt( clgame.pmove->velocity[0] * clgame.pmove->velocity[0] + clgame.pmove->velocity[1] * clgame.pmove->velocity[1] ) : 0.0f;
 			qboolean sprint = FBitSet( buttons, BIT( VRB_LSTICK ));
-			float af = fabs( fwd ), as = fabs( side );
+			float len = sqrt( fwd * fwd + side * side );
 
-			if( clgame.pmove && clgame.pmove->onground != -1 && !sprint && speed > 40.0f )
+			if( len > 0.001f )
 			{
-				if( af > 0.97f && as < 0.3f ) top_f = Q_max( top_f * 0.9995f, speed );
-				else if( as > 0.97f && af < 0.3f ) top_s = Q_max( top_s * 0.9995f, speed );
-			}
+				// at a full push the speed that comes out is the game's own maximum: remember it, any direction counts
+				if( clgame.pmove && clgame.pmove->onground != -1 && !sprint && speed > 40.0f && len > 0.97f )
+					top = Q_max( top * 0.9995f, speed );
 
-			cmd->forwardmove += ( af > 0.97f ) ? fwd * vr_move_cmd.value : fwd * top_f;
-			cmd->sidemove += ( as > 0.97f ) ? side * vr_move_cmd.value : side * top_s;
+				{
+					float cmdlen = ( len > 0.97f ) ? vr_move_cmd.value : len * top;
+
+					cmd->forwardmove += fwd / len * cmdlen;
+					cmd->sidemove += side / len * cmdlen;
+				}
+			}
 		}
 
 		if( fwd > 0.3f ) SetBits( cmd->buttons, IN_FORWARD );

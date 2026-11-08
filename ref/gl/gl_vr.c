@@ -224,7 +224,8 @@ static CVAR_DEFINE_AUTO( vr_dual_scale, "1", FCVAR_ARCHIVE, "left hand weapon: s
 static CVAR_DEFINE_AUTO( vr_muzzle_x, "0", FCVAR_ARCHIVE, "where the muzzle flash, shells and tracers start, moved along the weapon (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_muzzle_y, "0", FCVAR_ARCHIVE, "muzzle: sideways" );
 static CVAR_DEFINE_AUTO( vr_muzzle_z, "0", FCVAR_ARCHIVE, "muzzle: up" );
-static CVAR_DEFINE_AUTO( vr_hand_collide, "1", FCVAR_ARCHIVE, "1 = the weapon in your hand is pushed back by walls instead of going through them" );
+static CVAR_DEFINE_AUTO( vr_dual_builtin, "1", FCVAR_ARCHIVE, "1 = the left weapon of a dual wield is drawn by the engine's own studio renderer (it then turns with your hand). 0 = the game's renderer" );
+static CVAR_DEFINE_AUTO( vr_hand_collide, "0", 0, "1 = the weapon in your hand is pushed back by walls instead of going through them" );
 static CVAR_DEFINE_AUTO( vr_hand_reach, "18", FCVAR_ARCHIVE, "how far in front of the hand the weapon counts as touching a wall (units)" );
 static CVAR_DEFINE_AUTO( vr_anim_play, "shoot+fire+reload+shot", FCVAR_ARCHIVE, "animations of a weapon that play (part of the animation name, separated by +). All others hold the idle pose. A weapon can have its own choice (vr_anim_toggle, saved with vr_weapon_save)" );
 static CVAR_DEFINE_AUTO( vr_anim_mask, "0", 0, "animations that play for this weapon, as a number (bit per animation number). 0 = decided by the names in vr_anim_play" );
@@ -426,6 +427,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_roll );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_collide );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_builtin );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_anim_play );
 	gEngfuncs.Cvar_RegisterVariable( &vr_anim_mask );
@@ -856,15 +858,24 @@ static float VR_SwingHand( int hand, const ref_viewpass_t *game, const vec3_t ey
 static vec3_t vr_game_origin;
 static qboolean vr_game_origin_ok;
 
-// which leaf decides what is visible: the one the player's own eye is in. The two eyes can be in different leaves
-// (a thin step, a low wall, when you crouch), and one eye then misses surfaces the other one sees
-qboolean VR_GetPvsOrigin( vec3_t out )
+// What may be drawn is decided from several places at once, not from one: the eye being drawn, the middle of your head
+// and the game's own view point. In roomscale (or when you crouch, or lean over a low wall) these can sit in different
+// leaves of the map, and a surface that is only visible from one of them used to be skipped: textures that vanish in
+// one eye, parts of the world that disappear at random. The renderer merges the visibility of all of them
+int VR_GetPvsOrigins( vec3_t out[3] )
 {
-	if( !vr_game_origin_ok || !vr.in_eye_pass )
-		return false;
+	if( !vr.in_eye_pass )
+		return 0;
 
-	VectorCopy( vr_game_origin, out );
-	return true;
+	VectorCopy( vr.head_game, out[0] );
+
+	if( vr_game_origin_ok )
+	{
+		VectorCopy( vr_game_origin, out[1] );
+		return 2;
+	}
+
+	return 1;
 }
 
 static void VR_PublishAim( const ref_viewpass_t *game )
@@ -992,6 +1003,7 @@ static void VR_PublishUI( void )
 			&& VR_UIRayHit( vr.hand[0].origin_t, vr.hand[0].dir_t, &lu, &lv, &ld );
 
 		gEngfuncs.Cvar_SetValue( "vr_in_ui_lhit", lhit ? 1.0f : 0.0f );
+		VR_UISetPointerLeft( lhit, lu, lv );
 
 		if( lhit )
 		{
@@ -1296,6 +1308,18 @@ qboolean VR_GetViewModelAxes( vec3_t f, vec3_t l, vec3_t u )
 	return true;
 }
 
+// the same axes, whatever the rotation mode is (the muzzle offset must not depend on how the weapon is drawn)
+qboolean VR_GetPoseAxes( vec3_t f, vec3_t l, vec3_t u )
+{
+	if( !vr_pose_valid )
+		return false;
+
+	VectorCopy( vr_pose_f, f );
+	VectorCopy( vr_pose_l, l );
+	VectorCopy( vr_pose_u, u );
+	return true;
+}
+
 qboolean VR_ViewModelMirror( void )
 {
 	return vr_vm_mirror.value > 0.5f || ( vr_vm_mirror.value < 0.0f && vr_vm_mirror_auto );
@@ -1481,6 +1505,15 @@ qboolean VR_GetLeftHandPoseOfs( vec3_t origin, vec3_t angles, const float *ofs )
 
 	if( !vr_lhand.value || !vr.in_eye_pass || !vr.hand[0].valid )
 		return false;
+
+	// dual wielding: the left hand holds its own weapon, the universal hand would sit on top of it
+	if( vr_dual.value )
+	{
+		char dualmodel[64];
+
+		if( VR_CofDualModel( dualmodel, sizeof( dualmodel )))
+			return false;
+	}
 
 	VectorScale( vr.hand[0].fwd, vr_lh_grip_x.value + o[0], shift );
 	VectorSubtract( vr.hand[0].pos, shift, origin );
@@ -1864,7 +1897,11 @@ void VR_DrawDualWeapon( void )
 	pglScalef( scale, scale, scale );
 	pglTranslatef( -origin[0], -origin[1], -origin[2] );
 
+	// the engine's own studio renderer honours the angles we give; the game's renderer for this second weapon
+	// followed the arm but did not turn with the hand
+	R_StudioForceBuiltin( vr_dual_builtin.value != 0.0f );
 	VR_CofDrawDual( origin, vang );
+	R_StudioForceBuiltin( false );
 
 	pglPopMatrix();
 	pglDepthRange( gldepthmin, gldepthmax );

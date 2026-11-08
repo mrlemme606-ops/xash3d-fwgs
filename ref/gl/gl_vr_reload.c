@@ -593,6 +593,12 @@ qboolean VR_ReloadBoltOffset( float off[3] )
 	return true;
 }
 
+// is the left hand holding the weapon right now? (every vibration meant for the right hand then also goes to the left)
+qboolean VR_LeftGripping( void )
+{
+	return rl.active && rl.twohand;
+}
+
 // the left hand steers the gun: the weapon points from the right hand to the left hand
 qboolean VR_ReloadTwoHandAim( void )
 {
@@ -826,6 +832,10 @@ void VR_ReloadTick( void )
 		else if(( pressed & ( 1 << RLB_LGRIP )) && close )
 		{
 			rl.twohand = true;
+
+			// the left hand feels the gun: two firm pulses
+			gEngfuncs.Cvar_SetValue( "vr_in_haptic_len", 2600.0f );
+			gEngfuncs.Cvar_SetValue( "vr_in_haptic", 2.0f );	// 100 * 0 (left hand) + 2 pulses
 		}
 
 		near_gun = close || rl.twohand;

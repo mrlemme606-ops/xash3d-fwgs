@@ -145,6 +145,7 @@ static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
 static void R_VRScopeTrack( cl_entity_t *view );
 static qboolean r_vr_mirror;		// the weapon is drawn mirrored (a left-handed weapon held in the right hand)
+static qboolean r_force_builtin;	// the left weapon of a dual wield: draw it with this renderer
 static qboolean r_vr_viewmodel;	// the weapon is being drawn at the VR hand
 static cl_entity_t vr_lhand_ent;	// the universal left hand
 float r_sky_scale;		// > 0 while a sky model is drawn: shrinks it to fit the far clip plane
@@ -3255,8 +3256,15 @@ static int R_StudioDrawPlayer( int flags, entity_state_t *pplayer )
 		{
 			vec3_t mf, ml, mu;
 
-			if( VR_GetViewModelAxes( mf, ml, mu ))
-				VR_MuzzleOffset( RI.currententity->attachment[0], mf, ml, mu );
+			// the game's muzzle event reads attachment 0 for some weapons and attachment 1 for others (events 5001 and
+			// 5011), and the shell event uses both: move them all together so the setting works on every weapon
+			if( VR_GetPoseAxes( mf, ml, mu ))
+			{
+				int a;
+
+				for( a = 0; a < 4; a++ )
+					VR_MuzzleOffset( RI.currententity->attachment[a], mf, ml, mu );
+			}
 		}
 
 		R_StudioClientEvents( );
@@ -3657,6 +3665,11 @@ void VR_StudioCmds( void )
 	gEngfuncs.Cmd_AddCommand( "vr_anim_reset", VR_AnimReset_f, "this weapon's animations follow vr_anim_play again" );
 }
 
+void R_StudioForceBuiltin( qboolean on )
+{
+	r_force_builtin = on;
+}
+
 /*
 =================
 R_StudioDrawModelInternal
@@ -3670,7 +3683,7 @@ static void R_StudioDrawModelInternal( cl_entity_t *e, int flags )
 			R_StudioDrawPlayer( flags, &e->curstate );
 		else R_StudioDrawModel( flags );
 	}
-	else if( unlikely( r_studio_builtin_renderer.value ) || r_vr_viewmodel || r_sky_scale > 0.0f )
+	else if( unlikely( r_studio_builtin_renderer.value ) || r_vr_viewmodel || r_force_builtin || r_sky_scale > 0.0f )
 	{
 		if( e->player )
 			R_StudioDrawPlayer( flags, R_StudioGetPlayerState( e->index - 1 ));

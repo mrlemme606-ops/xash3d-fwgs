@@ -95,6 +95,10 @@ void VR_InputPoll( float head_yaw_relative, float head_pitch, qboolean physical_
 
 			gEngfuncs.Cvar_SetValue( "vr_in_haptic", 0.0f );
 			pulse_hand = bound( 0, v / 100, 2 );	// 2 = both hands
+
+			// the left hand is on the weapon: it feels what the right hand feels (shots, text messages...)
+			if( pulse_hand == 1 && VR_LeftGripping( ))
+				pulse_hand = 2;
 			pending = bound( 1, v % 100, 8 );
 			next_pulse = 0.0;
 		}

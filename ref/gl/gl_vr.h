@@ -34,7 +34,7 @@ qboolean VR_GripDebug( void );
 void VR_DrawGripSphere( void );
 qboolean VR_ClimbHide( void );
 void VR_MuzzleOffset( vec3_t att, const vec3_t f, const vec3_t l, const vec3_t u );
-qboolean VR_GetPvsOrigin( vec3_t out );
+int VR_GetPvsOrigins( vec3_t out[3] );
 qboolean VR_TwoHandActive( void );
 void VR_EndEventPose( qboolean was );
 void VR_CofSetHandLight( qboolean valid, qboolean omni, qboolean phone, const float *start, const float *dir, const float *spot );
@@ -65,6 +65,7 @@ void VR_GetHeadMatrix( float m[3][4] );
 void VR_UIUpdate( void );
 void VR_UIInitCvars( void );
 void VR_UISetPointer( qboolean visible, float u, float v );
+void VR_UISetPointerLeft( qboolean visible, float u, float v );
 qboolean VR_UIRayHit( const float origin[3], const float dir[3], float *u, float *v, float *dist );
 qboolean VR_GetViewModelPose( vec3_t origin, vec3_t angles );
 
@@ -102,6 +103,8 @@ typedef struct
 } vr_rl_left_t;
 
 void VR_ReloadInitCvars( void );
+qboolean VR_LeftGripping( void );
+void R_StudioForceBuiltin( qboolean on );
 void VR_ReloadTick( void );
 void VR_ReloadSetGunPose( const vec3_t origin, const vec3_t angles, float scale );
 void VR_ReloadObserve( const char *label, float animtime );
@@ -114,6 +117,7 @@ qboolean VR_ReloadBoltOffset( float off[3] );
 qboolean VR_ReloadWantsIdle( void );
 qboolean VR_ReloadTwoHandAim( void );
 qboolean VR_SkyModelsOn( void );
+qboolean VR_GetPoseAxes( vec3_t f, vec3_t l, vec3_t u );
 qboolean VR_GetViewModelAxes( vec3_t f, vec3_t l, vec3_t u );
 qboolean VR_ViewModelMirror( void );
 int VR_EyePrepass( void );
