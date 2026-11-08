@@ -62,6 +62,12 @@ static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepas
 #define COF_DLIGHTS		0x104CC550u	// 32 lights of 31 floats (sub_1005C0F0)
 #define COF_DLIGHT_KEY		0x104CC574u
 #define COF_FN_DLIGHTALLOC	0x1005C0F0u
+#define COF_SECONDARY		0x10556B48u	// HUD_DrawNormalTriangles draws the secondary view models (goggles, dual weapon...) when this is set
+#define COF_DUAL_NAME		0x10545870u	// char[64] model of the weapon in the left hand (DualWield message)
+#define COF_DUAL_MODE		0x105458B0u	// 3 = a weapon model
+#define COF_VANGLES		0x1055962Cu	// 3 floats: view pitch (down positive), yaw, roll
+#define COF_VORIGIN		0x10559638u	// 3 floats: view origin the secondary view models are drawn at
+#define COF_FN_SECONDARY	0x1008C7E0u
 #define COF_SCREENSZ		0x1018F430u	// int width, height the water effect copies from the screen
 
 static struct
@@ -77,6 +83,11 @@ static struct
 	mplane_t	*frustum;
 	float		*dlights;	// 32 * 31 floats
 	int		*scrsize;
+	volatile int	*secondary;
+	char		*dualname;
+	int		*dualmode;
+	float		*vangles, *vorigin;
+	qboolean	dual_ok;
 	int		s_scr[2];
 	qboolean	scr_ok;
 	qboolean	lights_ok;
@@ -240,6 +251,19 @@ static void COF_Resolve( void )
 
 		cof.dlights = (float *)( base + COF_RVA( COF_DLIGHTS ));
 		cof.lights_ok = COF_CodeRefs( base, COF_FN_DLIGHTALLOC, 0x90, dl_vars, 2 ) && COF_Readable( cof.dlights, 32 * 31 * 4, true );
+	}
+
+	{
+		static const unsigned dual_vars[] = { COF_DUAL_MODE, COF_VORIGIN };
+
+		cof.secondary = (volatile int *)( base + COF_RVA( COF_SECONDARY ));
+		cof.dualname = (char *)( base + COF_RVA( COF_DUAL_NAME ));
+		cof.dualmode = (int *)( base + COF_RVA( COF_DUAL_MODE ));
+		cof.vangles = (float *)( base + COF_RVA( COF_VANGLES ));
+		cof.vorigin = (float *)( base + COF_RVA( COF_VORIGIN ));
+		cof.dual_ok = COF_CodeRefs( base, COF_FN_SECONDARY, 0x900, dual_vars, 2 )
+			&& COF_Readable( cof.dualname, 64, false ) && COF_Readable( cof.dualmode, 4, false )
+			&& COF_Readable( cof.vangles, 12, true ) && COF_Readable( cof.vorigin, 12, true ) && COF_Readable( (void *)cof.secondary, 4, true );
 	}
 
 	cof.scrsize = (int *)( base + COF_RVA( COF_SCREENSZ ));
@@ -462,6 +486,7 @@ static void VR_CofStatus_f( void )
 		return;
 	}
 
+	gEngfuncs.Con_Printf( "  dual weapon hook: %s\n", cof.dual_ok ? "found" : "NOT found" );
 	gEngfuncs.Con_Printf( "  base %p, re-arm %s, frustum %s, eye origin %s\n", (void *)cof.base,
 		vr_cof_rearm.value ? "on" : "off", vr_cof_frustum.value ? "on" : "off", vr_cof_eyeorigin.value ? "on" : "off" );
 	gEngfuncs.Con_Printf( "  frames armed %d, passes re-armed %d, frames skipped (nothing armed) %d\n", cof.frames, cof.passes, cof.skipped );
@@ -505,6 +530,48 @@ float VR_CofDepthMax( void )
 	return 1.0f;
 #endif
 	return ( v > 0.1f && v < 1.0f ) ? v : 1.0f;
+}
+
+// the weapon in the left hand of a dual wield: the game draws it itself, in its "secondary view" (see COF_SECONDARY)
+qboolean VR_CofDualModel( char *out, int size )
+{
+#if defined( _WIN32 )
+	COF_Resolve();
+
+	if( !cof.ok || !cof.dual_ok || *cof.dualmode != 3 || Q_strlen( cof.dualname ) < 2 )
+		return false;
+
+	Q_strncpy( out, cof.dualname, size );
+	return true;
+#else
+	return false;
+#endif
+}
+
+// draw that weapon with the view origin and angles of the left hand
+void VR_CofDrawDual( const float *origin, const float *pitch_yaw_roll )
+{
+#if defined( _WIN32 )
+	float so[3], sa[3];
+	int sflag;
+
+	if( !cof.ok || !cof.dual_ok )
+		return;
+
+	memcpy( so, cof.vorigin, sizeof( so ));
+	memcpy( sa, cof.vangles, sizeof( sa ));
+	sflag = *cof.secondary;
+
+	memcpy( cof.vorigin, origin, sizeof( so ));
+	memcpy( cof.vangles, pitch_yaw_roll, sizeof( sa ));
+	*cof.secondary = 1;
+
+	gEngfuncs.pfnDrawNormalTriangles();
+
+	*cof.secondary = sflag;
+	memcpy( cof.vorigin, so, sizeof( so ));
+	memcpy( cof.vangles, sa, sizeof( sa ));
+#endif
 }
 
 qboolean VR_CofKeepPrepass( void )

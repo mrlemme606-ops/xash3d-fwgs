@@ -21,12 +21,21 @@ void VR_CofInitCvars( void );
 qboolean VR_CofActive( void );		// client.dll found, checked and the re-arm is switched on
 qboolean VR_CofFrameArmed( void );	// this frame's eye passes are being re-armed
 qboolean VR_CofKeepPrepass( void );
+qboolean VR_CofDualModel( char *out, int size );
+void VR_CofDrawDual( const float *origin, const float *pitch_yaw_roll );
+void VR_DrawDualWeapon( void );
 float VR_CofDepthMax( void );
 void VR_CofBeginFrame( void );
 void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin );
 void VR_CofEndFrame( void );
 qboolean VR_GetPassSize( int *width, int *height );
 qboolean VR_BeginEventPose( void );
+qboolean VR_GripDebug( void );
+void VR_DrawGripSphere( void );
+qboolean VR_ClimbHide( void );
+void VR_MuzzleOffset( vec3_t att, const vec3_t f, const vec3_t l, const vec3_t u );
+qboolean VR_GetPvsOrigin( vec3_t out );
+qboolean VR_TwoHandActive( void );
 void VR_EndEventPose( qboolean was );
 void VR_CofSetHandLight( qboolean valid, qboolean omni, qboolean phone, const float *start, const float *dir, const float *spot );
 void VR_NewFrame( void );

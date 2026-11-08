@@ -521,7 +521,13 @@ R_FindViewLeaf
 void R_FindViewLeaf( void )
 {
 	RI.oldviewleaf = RI.viewleaf;
-	RI.viewleaf = gEngfuncs.Mod_PointInLeaf( RI.rvp.vieworigin, WORLDMODEL->nodes, WORLDMODEL );
+	{
+		vec3_t pvs_origin;
+
+		if( VR_GetPvsOrigin( pvs_origin ))
+			RI.viewleaf = gEngfuncs.Mod_PointInLeaf( pvs_origin, WORLDMODEL->nodes, WORLDMODEL );
+		else RI.viewleaf = gEngfuncs.Mod_PointInLeaf( RI.rvp.vieworigin, WORLDMODEL->nodes, WORLDMODEL );
+	}
 }
 
 /*
@@ -1044,7 +1050,10 @@ static void R_DrawEntitiesOnList( void )
 	pglDisable( GL_BLEND );	// Trinity Render issues
 
 	if( !FBitSet( RI.rvp.flags, RF_ONLY_CLIENTDRAW ))
+	{
 		R_DrawViewModel();
+		VR_DrawDualWeapon();	// the weapon in the left hand, when dual wielding (VR only)
+	}
 	gEngfuncs.CL_ExtraUpdate();
 
 	GL_CheckForErrors();

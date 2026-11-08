@@ -3249,6 +3249,16 @@ static int R_StudioDrawPlayer( int flags, entity_state_t *pplayer )
 	if( flags & STUDIO_EVENTS )
 	{
 		R_StudioCalcAttachments( );
+
+		// VR: the muzzle can be moved (vr_muzzle_x/y/z), for the flash, the shells and the tracers
+		if( r_vr_viewmodel && RI.currententity == tr.viewent )
+		{
+			vec3_t mf, ml, mu;
+
+			if( VR_GetViewModelAxes( mf, ml, mu ))
+				VR_MuzzleOffset( RI.currententity->attachment[0], mf, ml, mu );
+		}
+
 		R_StudioClientEvents( );
 
 		// copy attachments into global entity array
@@ -3838,6 +3848,9 @@ static void R_VRDrawLeftHand( void )
 	vr_rl_left_t rld;
 	qboolean from_weapon = false;
 
+	if( VR_ClimbHide())
+		return;
+
 	// the manual reload system may want something else than the idle hand
 	if( VR_ReloadLeftDraw( &rld ))
 	{
@@ -4005,6 +4018,10 @@ void R_DrawViewModel( void )
 
 	// VR: the scope view shows the world only, no weapon
 	if( VR_ScopePass( ))
+		return;
+
+	// VR: on a ladder or a boat nothing is held
+	if( VR_ClimbHide())
 		return;
 
 	if( ENGINE_GET_PARM( PARM_THIRDPERSON ))

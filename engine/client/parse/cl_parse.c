@@ -2233,7 +2233,7 @@ CL_ParseUserMessage
 handles all user messages
 ==============
 */
-extern void IN_VRUserMsg( const char *name );
+extern void IN_VRUserMsg( const char *name, const byte *buf, int size );
 extern qboolean IN_VRActive( void );
 
 void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
@@ -2290,7 +2290,7 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 	// parse user message into buffer
 	MSG_ReadBytes( msg, pbuf, sizeof( pbuf ), iSize );
 
-	IN_VRUserMsg( clgame.msg[i].name );	// VR: the SteamVR keyboard follows the game's computer screen
+	IN_VRUserMsg( clgame.msg[i].name, (const byte *)pbuf, iSize );	// VR: the SteamVR keyboard follows the game's computer screen
 
 	if( cl_trace_messages.value )
 	{

@@ -37,12 +37,12 @@ static CVAR_DEFINE_AUTO( vr_ui_maxwidth, "2.6", 0, "widest the UI panel may get,
 static CVAR_DEFINE_AUTO( vr_hud_hand, "1", FCVAR_ARCHIVE, "1 = two strips of the HUD (health/stamina and ammo, see vr_hud_band, vr_hud_x1, vr_hud_x2) are shown on the back of your right hand instead of the floating panel. Everything else stays on the panel" );
 static CVAR_DEFINE_AUTO( vr_hud_width, "0.22", FCVAR_ARCHIVE, "width in meters of the HUD on your hand" );
 static CVAR_DEFINE_AUTO( vr_hud_band, "0 0.14", FCVAR_ARCHIVE, "height of the strips taken from the HUD, as: bottom top (0 to 1 of the screen height, from the bottom). Needs quotes" );
-static CVAR_DEFINE_AUTO( vr_hud_x1, "0 0.30", FCVAR_ARCHIVE, "first strip (health, stamina), as: left right (0 to 1 of the screen width). Needs quotes" );
-static CVAR_DEFINE_AUTO( vr_hud_x2, "0.78 1", FCVAR_ARCHIVE, "second strip (ammo), as: left right. Set to \"0 0\" for no second strip" );
-static CVAR_DEFINE_AUTO( vr_hud_pos, "0 0.045 0.06", FCVAR_ARCHIVE, "where the HUD sits on the controller, as: x y z in meters (y = up, z = toward your wrist). Needs quotes" );
+static CVAR_DEFINE_AUTO( vr_hud_x1, "0 0.18", FCVAR_ARCHIVE, "first strip (health, stamina), as: left right (0 to 1 of the screen width). Needs quotes" );
+static CVAR_DEFINE_AUTO( vr_hud_x2, "0.86 1", FCVAR_ARCHIVE, "second strip (ammo), as: left right. Set to \"0 0\" for no second strip" );
+static CVAR_DEFINE_AUTO( vr_hud_pos, "-0.05 0 0.15", FCVAR_ARCHIVE, "where the HUD sits on the controller, as: x y z in meters (y = up, z = toward your wrist). Needs quotes" );
 static CVAR_DEFINE_AUTO( vr_hud_side, "0", FCVAR_ARCHIVE, "which hand wears the HUD: 0 = left (like a watch), 1 = right" );
-static CVAR_DEFINE_AUTO( vr_hud_rot, "0 0", FCVAR_ARCHIVE, "extra turn of the hand HUD, as: yaw roll in degrees (vr_hud_tilt is the third direction). Needs quotes" );
-static CVAR_DEFINE_AUTO( vr_hud_tilt, "0", FCVAR_ARCHIVE, "tilt of the hand HUD around the controller's side axis, in degrees" );
+static CVAR_DEFINE_AUTO( vr_hud_rot, "270 90", FCVAR_ARCHIVE, "extra turn of the hand HUD, as: yaw roll in degrees (vr_hud_tilt is the third direction). Needs quotes" );
+static CVAR_DEFINE_AUTO( vr_hud_tilt, "-35", FCVAR_ARCHIVE, "tilt of the hand HUD around the controller's side axis, in degrees" );
 static CVAR_DEFINE_AUTO( vr_hud_alpha, "1.0", FCVAR_ARCHIVE, "opacity of the hand HUD when you look at it" );
 static CVAR_DEFINE_AUTO( vr_ui_pointer, "0.035", 0, "size in meters of the dot that shows where your hand points on the UI, drawn on top of everything (0 = off)" );
 static CVAR_DEFINE_AUTO( vr_ui_height, "-0.12", 0, "vertical offset of the UI panel from eye level, meters (negative = lower)" );
@@ -237,6 +237,10 @@ void VR_HUDCapture( void )
 		if( off && off->value > 0.5f )
 			return;
 	}
+
+	// the left hand is busy holding the weapon: the HUD would just fly around with it
+	if( VR_TwoHandActive())
+		return;
 
 	VR_HUDRects( w, h, rect );
 	th = rect[0][3];

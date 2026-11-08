@@ -1041,7 +1041,7 @@ static void Host_InitCommon( int argc, char **argv, const char *progname, qboole
 
 	host.mempool = Mem_AllocPool( "Zone Engine" );
 
-	host.allow_console = DEFAULT_ALLOWCONSOLE || DEFAULT_DEV > 0;
+	host.allow_console = true;	// Cry of Fear VR: the console (the key under Esc) is always there, no -console needed
 
 	if( Sys_CheckParm( "-dev" ))
 	{

@@ -96,6 +96,12 @@ static CVAR_DEFINE_AUTO( vr_rl_pouch_fwd, "3", FCVAR_ARCHIVE, "where the magazin
 static CVAR_DEFINE_AUTO( vr_rl_pouch_radius, "14", FCVAR_ARCHIVE, "how close your left hand has to be to the pouch to take a magazine" );
 static CVAR_DEFINE_AUTO( vr_rl_mag_radius, "10", FCVAR_ARCHIVE, "how close the magazine has to be to the magazine well to go in (also to pull it out by hand)" );
 static CVAR_DEFINE_AUTO( vr_rl_bolt_radius, "9", FCVAR_ARCHIVE, "how close your left hand has to be to the slide / bolt to grab it" );
+CVAR_DEFINE_AUTO( vr_rl_grip_x, "6", FCVAR_ARCHIVE, "centre of the grip sphere: along the weapon, from the weapon model's own origin (saved per weapon)" );
+CVAR_DEFINE_AUTO( vr_rl_grip_y, "0", FCVAR_ARCHIVE, "centre of the grip sphere: sideways" );
+CVAR_DEFINE_AUTO( vr_rl_grip_z, "0", FCVAR_ARCHIVE, "centre of the grip sphere: up" );
+static CVAR_DEFINE_AUTO( vr_rl_grip_debug, "0", 0, "1 = show the grip sphere (a yellow ball, green while your left hand is inside it) to position it" );
+static vec3_t rl_grip_center;
+static qboolean rl_grip_valid, rl_grip_inside;
 CVAR_DEFINE_AUTO( vr_rl_grip_radius, "12", FCVAR_ARCHIVE, "how close your left hand has to be to the gun for the left grip to hold it with two hands" );
 static CVAR_DEFINE_AUTO( vr_rl_travel_scale, "1", FCVAR_ARCHIVE, "multiplies how far slides and bolts travel (1 = table value)" );
 static CVAR_DEFINE_AUTO( vr_rl_always_rack, "0", FCVAR_ARCHIVE, "1 = the bolt always has to be worked after a reload, not only when the gun was empty" );
@@ -801,7 +807,12 @@ void VR_ReloadTick( void )
 	empty_now = RL_LabelHas( rl.obs, "noshot" ) || RL_LabelHas( rl.obs, "empty" ) || RL_LabelHas( rl.obs, "dry" ) || RL_LabelHas( rl.obs, "nomag" );
 
 	// two hands on the gun
-	VectorMA( rl.gun_org, 6.0f, rl.gun_fwd, grip_pt );
+	VectorMA( rl.gun_org, vr_rl_grip_x.value, rl.gun_fwd, grip_pt );
+	VectorMA( grip_pt, vr_rl_grip_y.value, rl.gun_left, grip_pt );
+	VectorMA( grip_pt, vr_rl_grip_z.value, rl.gun_up, grip_pt );
+	VectorCopy( grip_pt, rl_grip_center );
+	rl_grip_valid = true;
+	rl_grip_inside = RL_Dist( lpos, grip_pt ) < vr_rl_grip_radius.value;
 
 	if( rl.state == RL_READY || rl.state == RL_GAME )
 	{
@@ -1113,6 +1124,10 @@ void VR_ReloadInitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_mag_radius );
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_bolt_radius );
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_grip_radius );
+	gEngfuncs.Cvar_RegisterVariable( &vr_rl_grip_x );
+	gEngfuncs.Cvar_RegisterVariable( &vr_rl_grip_y );
+	gEngfuncs.Cvar_RegisterVariable( &vr_rl_grip_z );
+	gEngfuncs.Cvar_RegisterVariable( &vr_rl_grip_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_travel_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_always_rack );
 	gEngfuncs.Cvar_RegisterVariable( &vr_rl_mute );
@@ -1128,4 +1143,40 @@ void VR_ReloadInitCvars( void )
 	gEngfuncs.Cmd_AddCommand( "vr_rl_save", RL_Save_f, "save the reload hand positions (vr_rl_tune) for the weapon you hold" );
 	gEngfuncs.Cmd_AddCommand( "vr_rl_sound", RL_Sound_f, "vr_rl_sound <eject|maggrab|magin|boltback|boltfwd> <sound path>: sound for a phase of the reload (saved with vr_rl_save)" );
 	gEngfuncs.Cmd_AddCommand( "vr_rl_set", RL_Set_f, "(used by the saved file) vr_rl_set <slot> x y z pitch yaw roll" );
+}
+
+// the grip sphere, as three circles (called while the controllers' debug lines are drawn)
+qboolean VR_GripDebug( void )
+{
+	return vr_rl_grip_debug.value != 0.0f && rl_grip_valid && rl.active;
+}
+
+void VR_DrawGripSphere( void )
+{
+	int axis, i;
+	float r = vr_rl_grip_radius.value;
+
+	if( !VR_GripDebug())
+		return;
+
+	pglLineWidth( 2.0f );
+	pglColor4f( rl_grip_inside ? 0.2f : 1.0f, 1.0f, 0.1f, 1.0f );
+
+	for( axis = 0; axis < 3; axis++ )
+	{
+		pglBegin( GL_LINE_LOOP );
+
+		for( i = 0; i < 32; i++ )
+		{
+			float a = i * ( M_PI_F * 2.0f / 32.0f ), c = cos( a ) * r, s = sin( a ) * r;
+			vec3_t p;
+
+			VectorCopy( rl_grip_center, p );
+			p[axis] += c;
+			p[( axis + 1 ) % 3] += s;
+			pglVertex3fv( p );
+		}
+
+		pglEnd();
+	}
 }
