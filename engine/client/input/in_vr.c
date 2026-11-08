@@ -454,7 +454,20 @@ void IN_VRUserMsg( const char *name, const byte *buf, int size )
 			double gap = host.realtime - last_shot;
 
 			Cvar_DirectSetValue( &vr_in_haptic_len, gap < 0.15 ? 1200.0f : ( gap < 0.5 ? 2600.0f : 3999.0f ));
-			Cvar_DirectSetValue( &vr_in_haptic, 101.0f );
+			// dual wield: the hand whose trigger is held feels the shot (both when both are held)
+			{
+				float code = 101.0f;
+
+				if( vr_in_dual.value > 0.5f )
+				{
+					qboolean lt = FBitSet( vr_prev_buttons, BIT( VRB_LTRIGGER )), rt = FBitSet( vr_prev_buttons, BIT( VRB_RTRIGGER ));
+
+					if( lt && !rt ) code = 1.0f;
+					else if( lt && rt ) code = 201.0f;
+				}
+
+				Cvar_DirectSetValue( &vr_in_haptic, code );
+			}
 			last_shot = host.realtime;
 		}
 

@@ -38,6 +38,7 @@ typedef char vr_cof_plane_size_check[( sizeof( mplane_t ) == 20 ) ? 1 : -1];
 
 static CVAR_DEFINE_AUTO( vr_cof_rearm, "1", FCVAR_ARCHIVE, "1 = give the game's client.dll renderer (world lighting, sky) its per-frame pass again for every eye and scope picture" );
 static CVAR_DEFINE_AUTO( vr_cof_frustum, "1", FCVAR_ARCHIVE, "1 = replace the client.dll culling frustum with the real eye frustum (stops surfaces at the edge of the view being skipped)" );
+static CVAR_DEFINE_AUTO( vr_cof_eyeangles, "1", FCVAR_ARCHIVE, "1 = give the client.dll the view angles of the eye being drawn (your head), not just the game's own. Its water reflections and effects are built from them" );
 static CVAR_DEFINE_AUTO( vr_cof_eyeorigin, "1", FCVAR_ARCHIVE, "1 = centre the client.dll sky on the eye being drawn instead of the game's view origin" );
 static CVAR_DEFINE_AUTO( vr_cof_depth, "0.8", 0, "far end of the depth range the world is drawn in while the game's client.dll is attached (it keeps 0.8 to 1.0 for its sky). 1 = off" );
 static CVAR_DEFINE_AUTO( vr_cof_watersize, "1", FCVAR_ARCHIVE, "1 = tell the game's water effect the size of the eye picture (it copies the screen from the bottom left corner at the window size). Experimental" );
@@ -87,6 +88,8 @@ static struct
 	char		*dualname;
 	int		*dualmode;
 	float		*vangles, *vorigin;
+	float		s_vo[3], s_va[3];
+	int		hid_secondary;
 	qboolean	dual_ok;
 	int		s_scr[2];
 	qboolean	scr_ok;
@@ -404,6 +407,11 @@ void VR_CofBeginFrame( void )
 	cof.s_skydone = *cof.skydone;
 	cof.s_skycount = *cof.skycount;
 	memcpy( cof.s_org, cof.vieworg, sizeof( cof.s_org ));
+	if( cof.dual_ok )
+	{
+		memcpy( cof.s_vo, cof.vorigin, sizeof( cof.s_vo ));
+		memcpy( cof.s_va, cof.vangles, sizeof( cof.s_va ));
+	}
 	if( cof.scr_ok )
 	{
 		cof.s_scr[0] = cof.scrsize[0];
@@ -415,7 +423,7 @@ void VR_CofBeginFrame( void )
 }
 
 // before every R_RenderScene of a VR frame, after the engine built RI.frustum
-void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin )
+void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin, const float *eyeangles )
 {
 	const mplane_t *planes = (const mplane_t *)frustum_planes;
 
@@ -430,6 +438,15 @@ void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin )
 
 	if( vr_cof_eyeorigin.value != 0.0f && eyeorigin )
 		memcpy( cof.vieworg, eyeorigin, sizeof( float ) * 3 );
+
+	if( cof.dual_ok && vr_cof_eyeangles.value != 0.0f )
+	{
+		if( eyeorigin )
+			memcpy( cof.vorigin, eyeorigin, sizeof( float ) * 3 );
+
+		if( eyeangles )
+			memcpy( cof.vangles, eyeangles, sizeof( float ) * 3 );
+	}
 
 	if( vr_cof_frustum.value != 0.0f && planes )
 		memcpy( cof.frustum, planes, sizeof( mplane_t ) * 4 );	// left, right, bottom, top: the engine and the DLL both use inward normals
@@ -462,6 +479,12 @@ void VR_CofEndFrame( void )
 {
 	if( cof.in_frame && cof.ok && vr_cof_eyeorigin.value != 0.0f )
 		memcpy( cof.vieworg, cof.s_org, sizeof( cof.s_org ));
+
+	if( cof.in_frame && cof.ok && cof.dual_ok && vr_cof_eyeangles.value != 0.0f )
+	{
+		memcpy( cof.vorigin, cof.s_vo, sizeof( cof.s_vo ));
+		memcpy( cof.vangles, cof.s_va, sizeof( cof.s_va ));
+	}
 
 	if( cof.in_frame && cof.scr_ok && cof.s_scr[0] > 0 )
 	{
@@ -501,7 +524,7 @@ static void VR_CofStatus_f( void )
 qboolean VR_CofActive( void ) { return false; }
 void VR_CofBeginFrame( void ) { }
 qboolean VR_CofFrameArmed( void ) { return false; }
-void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin ) { }
+void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin, const float *eyeangles ) { }
 void VR_CofEndFrame( void ) { }
 void VR_CofSetHandLight( qboolean valid, qboolean omni, qboolean phone, const float *start, const float *dir, const float *spot ) { }
 
@@ -530,6 +553,30 @@ float VR_CofDepthMax( void )
 	return 1.0f;
 #endif
 	return ( v > 0.1f && v < 1.0f ) ? v : 1.0f;
+}
+
+// while the game draws its own normal triangles in an eye pass, its secondary view (the dual weapon, always in front of the
+// body and turning with the mouse) must not be drawn: the copy that follows your left hand is drawn by VR_CofDrawDual
+void VR_CofHideSecondary( qboolean hide )
+{
+#if defined( _WIN32 )
+	if( !cof.ok || !cof.dual_ok || *cof.dualmode != 3 )
+	{
+		cof.hid_secondary = -1;
+		return;
+	}
+
+	if( hide )
+	{
+		cof.hid_secondary = *cof.secondary;
+		*cof.secondary = 0;
+	}
+	else if( cof.hid_secondary >= 0 )
+	{
+		*cof.secondary = cof.hid_secondary;
+		cof.hid_secondary = -1;
+	}
+#endif
 }
 
 // the weapon in the left hand of a dual wield: the game draws it itself, in its "secondary view" (see COF_SECONDARY)
@@ -584,6 +631,7 @@ void VR_CofInitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_rearm );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_frustum );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_eyeorigin );
+	gEngfuncs.Cvar_RegisterVariable( &vr_cof_eyeangles );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_prepass );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_watersize );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_depth );

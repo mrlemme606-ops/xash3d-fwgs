@@ -3251,22 +3251,6 @@ static int R_StudioDrawPlayer( int flags, entity_state_t *pplayer )
 	{
 		R_StudioCalcAttachments( );
 
-		// VR: the muzzle can be moved (vr_muzzle_x/y/z), for the flash, the shells and the tracers
-		if( r_vr_viewmodel && RI.currententity == tr.viewent )
-		{
-			vec3_t mf, ml, mu;
-
-			// the game's muzzle event reads attachment 0 for some weapons and attachment 1 for others (events 5001 and
-			// 5011), and the shell event uses both: move them all together so the setting works on every weapon
-			if( VR_GetPoseAxes( mf, ml, mu ))
-			{
-				int a;
-
-				for( a = 0; a < 4; a++ )
-					VR_MuzzleOffset( RI.currententity->attachment[a], mf, ml, mu );
-			}
-		}
-
 		R_StudioClientEvents( );
 
 		// copy attachments into global entity array
@@ -3398,6 +3382,23 @@ static int R_StudioDrawModel( int flags )
 	if( flags & STUDIO_EVENTS )
 	{
 		R_StudioCalcAttachments( );
+
+		// VR: the muzzle can be moved (vr_muzzle_x/y/z), for the flash, the shells and the tracers
+		if( r_vr_viewmodel && RI.currententity == tr.viewent )
+		{
+			vec3_t mf, ml, mu;
+
+			// the game's muzzle event reads attachment 0 for some weapons and attachment 1 for others (events 5001 and
+			// 5011), and the shell event uses both: move them all together so the setting works on every weapon
+			if( VR_GetPoseAxes( mf, ml, mu ))
+			{
+				int a;
+
+				for( a = 0; a < 4; a++ )
+					VR_MuzzleOffset( RI.currententity->attachment[a], mf, ml, mu );
+			}
+		}
+
 		R_StudioClientEvents( );
 
 		// copy attachments into global entity array

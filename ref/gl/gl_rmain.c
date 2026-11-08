@@ -967,7 +967,18 @@ static void R_DrawEntitiesOnList( void )
 	GL_CheckForErrors();
 
 	if( FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
+	{
+		// VR: the game's own copy of the left-hand weapon is skipped here (it sat in front of the body)
+		qboolean hide2 = VR_IsActive() && VR_CofActive() && vr_dual_hide_game_copy();
+
+		if( hide2 )
+			VR_CofHideSecondary( true );
+
 		gEngfuncs.pfnDrawNormalTriangles();
+
+		if( hide2 )
+			VR_CofHideSecondary( false );
+	}
 
 	GL_CheckForErrors();
 
@@ -1076,7 +1087,7 @@ void R_RenderScene( void )
 	tr.dlightframecount = R_PushDlights( WORLDMODEL, tr.framecount );
 
 	R_SetupFrustum();
-	VR_CofBeforePass( RI.frustum.planes, RI.rvp.vieworigin );	// no-op unless a VR frame with Cry of Fear's client.dll
+	VR_CofBeforePass( RI.frustum.planes, RI.rvp.vieworigin, RI.rvp.viewangles );	// no-op unless a VR frame with Cry of Fear's client.dll
 	R_SetupFrame();
 	R_SetupGL( true );
 	R_Clear( ~0 );

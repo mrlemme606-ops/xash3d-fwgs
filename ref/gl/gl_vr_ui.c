@@ -226,6 +226,7 @@ void VR_HUDCapture( void )
 	GLint scissor_box[4];
 	GLfloat clear[4];
 	GLboolean scissor;
+	qboolean hidden;
 
 	hud.have = false;
 
@@ -241,9 +242,9 @@ void VR_HUDCapture( void )
 			return;
 	}
 
-	// the left hand is busy holding the weapon: the HUD would just fly around with it
-	if( VR_TwoHandActive())
-		return;
+	// the left hand is busy holding the weapon: the HUD would just fly around with it. The strips are still cut out of
+	// the picture (so they do not show up on the panel in front of you instead), they just are not put anywhere
+	hidden = VR_TwoHandActive();
 
 	VR_HUDRects( w, h, rect );
 	th = rect[0][3];
@@ -252,35 +253,38 @@ void VR_HUDCapture( void )
 	if( tw < 8 || th < 4 )
 		return;
 
-	if( !hud.tex || hud.tex_w != tw || hud.tex_h != th )
+	if( !hidden )
 	{
-		if( hud.tex )
-			pglDeleteTextures( 1, &hud.tex );
+		if( !hud.tex || hud.tex_w != tw || hud.tex_h != th )
+		{
+			if( hud.tex )
+				pglDeleteTextures( 1, &hud.tex );
 
-		pglGenTextures( 1, &hud.tex );
+			pglGenTextures( 1, &hud.tex );
+			pglBindTexture( GL_TEXTURE_2D, hud.tex );
+			pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+			pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+			pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+			pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+			pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, tw, th, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
+			hud.tex_w = tw;
+			hud.tex_h = th;
+		}
+
 		pglBindTexture( GL_TEXTURE_2D, hud.tex );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
-		pglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-		pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, tw, th, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
-		hud.tex_w = tw;
-		hud.tex_h = th;
+
+		for( i = 0; i < 2; i++ )
+		{
+			if( !rect[i][2] )
+				continue;
+
+			pglCopyTexSubImage2D( GL_TEXTURE_2D, 0, xoff, 0, rect[i][0], rect[i][1], rect[i][2], rect[i][3] );
+			xoff += rect[i][2];
+		}
+
+		glState.currentTextures[glState.activeTMU] = -1;
+		glState.currentTexturesIndex[glState.activeTMU] = -1;
 	}
-
-	pglBindTexture( GL_TEXTURE_2D, hud.tex );
-
-	for( i = 0; i < 2; i++ )
-	{
-		if( !rect[i][2] )
-			continue;
-
-		pglCopyTexSubImage2D( GL_TEXTURE_2D, 0, xoff, 0, rect[i][0], rect[i][1], rect[i][2], rect[i][3] );
-		xoff += rect[i][2];
-	}
-
-	glState.currentTextures[glState.activeTMU] = -1;
-	glState.currentTexturesIndex[glState.activeTMU] = -1;
 
 	// wipe just those strips from the window
 	scissor = pglIsEnabled( GL_SCISSOR_TEST );
@@ -305,7 +309,7 @@ void VR_HUDCapture( void )
 		pglDisable( GL_SCISSOR_TEST );
 
 	pglClearColor( clear[0], clear[1], clear[2], clear[3] );
-	hud.have = true;
+	hud.have = !hidden;
 }
 
 static void VR_UIHideHUD( void )

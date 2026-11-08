@@ -126,7 +126,7 @@ static CVAR_DEFINE_AUTO( vr_worldscale, "39.37", 0, "game units per meter (GoldS
 static CVAR_DEFINE_AUTO( vr_flip_roll, "0", 0, "set to 1 if head roll is inverted" );
 static CVAR_DEFINE_AUTO( vr_positional, "1", 0, "0 = ignore head movement (rotation only), useful for diagnosing warping" );
 static CVAR_DEFINE_AUTO( vr_sym_proj, "1", FCVAR_ARCHIVE, "1 = draw each eye with a centred (symmetric) camera like the normal game and let SteamVR crop the part your lens needs. The game's own water, glass and sky effects assume a centred camera and warp otherwise. 0 = the headset's off-centre frustum" );
-static CVAR_DEFINE_AUTO( vr_flip_vfov, "1", FCVAR_ARCHIVE, "diagnostic: swap the up and down field of view. Try 1 if what is drawn sits a little too low or high compared to the menu pointer" );
+static CVAR_DEFINE_AUTO( vr_flip_vfov, "1", FCVAR_ARCHIVE, "diagnostic for vr_sym_proj 0 only (it has no effect with vr_sym_proj 1): swap the up and down field of view. Try 1 if what is drawn sits a little too low or high compared to the menu pointer" );
 static CVAR_DEFINE_AUTO( vr_fov_scale, "1.0", 0, "diagnostic: scale the rendered field of view tangents (1.0 = exact)" );
 static CVAR_DEFINE_AUTO( vr_crouch_height, "0.30", FCVAR_ARCHIVE, "meters below your recentered height that count as physically crouching (you stand up again at 60% of this)" );
 static CVAR_DEFINE_AUTO( vr_crouch_comp, "28", FCVAR_ARCHIVE, "units the view is given back when you crouch (the game lowers it too, so it is not counted twice). 0 = measured automatically (experimental)" );
@@ -225,6 +225,7 @@ static CVAR_DEFINE_AUTO( vr_dual_scale, "1", FCVAR_ARCHIVE, "left hand weapon: s
 static CVAR_DEFINE_AUTO( vr_muzzle_x, "0", FCVAR_ARCHIVE, "where the muzzle flash, shells and tracers start, moved along the weapon (saved per weapon)" );
 static CVAR_DEFINE_AUTO( vr_muzzle_y, "0", FCVAR_ARCHIVE, "muzzle: sideways" );
 static CVAR_DEFINE_AUTO( vr_muzzle_z, "0", FCVAR_ARCHIVE, "muzzle: up" );
+static CVAR_DEFINE_AUTO( vr_dual_own, "1", FCVAR_ARCHIVE, "1 = hide the game's own picture of the left weapon in the dual wield (the one in front of your body) and show only the one on your hand" );
 static CVAR_DEFINE_AUTO( vr_dual_builtin, "1", FCVAR_ARCHIVE, "1 = the left weapon of a dual wield is drawn by the engine's own studio renderer (it then turns with your hand). 0 = the game's renderer" );
 static CVAR_DEFINE_AUTO( vr_hand_collide, "0", 0, "1 = the weapon in your hand is pushed back by walls instead of going through them" );
 static CVAR_DEFINE_AUTO( vr_hand_reach, "18", FCVAR_ARCHIVE, "how far in front of the hand the weapon counts as touching a wall (units)" );
@@ -262,6 +263,7 @@ static struct
 
 	TrackedDevicePose_t	poses[VR_MAX_DEVICES];
 
+	float		raw_up[2], raw_down[2];	// the headset's true up and down tangents, whatever vr_flip_vfov says
 	float		tan_frustum[2][4];	// per eye: left, right, up, down (tangents, left/down negative)
 	float		eye_offset[2][3];	// eye position in head space, meters (OpenVR axes)
 	float		eye_rot[2][3][3];	// eye orientation relative to the head (identity on most headsets)
@@ -432,6 +434,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_collide );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_builtin );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_own );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_anim_play );
 	gEngfuncs.Cvar_RegisterVariable( &vr_anim_mask );
@@ -600,6 +603,8 @@ static void VR_Init( void )
 		vr.tan_frustum[eye][1] = r;
 		vr.tan_frustum[eye][2] = vr_flip_vfov.value ? b : -t;
 		vr.tan_frustum[eye][3] = vr_flip_vfov.value ? t : -b;
+		vr.raw_up[eye] = -t;
+		vr.raw_down[eye] = -b;
 
 		e = vr.system->GetEyeToHeadTransform( eye );
 		vr.eye_offset[eye][0] = e.m[0][3];
@@ -640,6 +645,8 @@ static void VR_UpdateEyeParams( void )
 		vr.tan_frustum[eye][1] = r;
 		vr.tan_frustum[eye][2] = vr_flip_vfov.value ? b : -t;
 		vr.tan_frustum[eye][3] = vr_flip_vfov.value ? t : -b;
+		vr.raw_up[eye] = -t;
+		vr.raw_down[eye] = -b;
 
 		e = vr.system->GetEyeToHeadTransform( eye );
 
@@ -1318,6 +1325,14 @@ qboolean VR_GetViewModelAxes( vec3_t f, vec3_t l, vec3_t u )
 }
 
 // the same axes, whatever the rotation mode is (the muzzle offset must not depend on how the weapon is drawn)
+// the game's own picture of the left weapon is only hidden while we draw one on the hand ourselves
+qboolean vr_dual_hide_game_copy( void )
+{
+	char dualmodel[64];
+
+	return vr_dual.value && vr_dual_own.value && VR_CofDualModel( dualmodel, sizeof( dualmodel ));
+}
+
 qboolean VR_GetPoseAxes( vec3_t f, vec3_t l, vec3_t u )
 {
 	if( !vr_pose_valid )
@@ -2831,8 +2846,10 @@ void VR_SetupEyeView( int eye, const ref_viewpass_t *game, ref_viewpass_t *out )
 	// the part of the centred picture that is the headset's real frustum (see vr_sym_proj)
 	vr.eye_bounds[eye & 1][0] = ( vr.cur_frustum[0] + tan_x ) / ( 2.0f * tan_x );
 	vr.eye_bounds[eye & 1][1] = ( vr.cur_frustum[1] + tan_x ) / ( 2.0f * tan_x );
-	vr.eye_bounds[eye & 1][2] = ( vr.cur_frustum[3] + tan_y ) / ( 2.0f * tan_y );
-	vr.eye_bounds[eye & 1][3] = ( vr.cur_frustum[2] + tan_y ) / ( 2.0f * tan_y );
+	// (vr_flip_vfov is a trick for the off-centre picture. The crop is always made from the headset's true numbers, so the
+	// two settings no longer fight each other)
+	vr.eye_bounds[eye & 1][2] = ( vr.raw_down[eye & 1] * vr_fov_scale.value + tan_y ) / ( 2.0f * tan_y );
+	vr.eye_bounds[eye & 1][3] = ( vr.raw_up[eye & 1] * vr_fov_scale.value + tan_y ) / ( 2.0f * tan_y );
 
 	vr.cur_eye = eye;
 	vr.in_eye_pass = true;
