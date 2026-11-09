@@ -232,8 +232,43 @@ in a frame.  Not used for pushmove objects, because they must be exact.
 Returns false if the entity removed itself.
 =============
 */
+#if !XASH_DEDICATED
+extern double vr_melee_window_until;	// in_vr.c: a real VR swing has just begun
+extern convar_t vr_melee_instant;
+
+/*
+=============
+SV_VRMeleeInstant
+
+Cry of Fear's melee weapons set a think on the weapon, 0.28 to 0.41 seconds after the attack, and the hit happens in
+it. In VR the hit should land when you swing, not when the game's animation would have. So right after a real swing,
+that waiting think of the player's own weapon is made to run in the next frame.
+=============
+*/
+static void SV_VRMeleeInstant( edict_t *ent )
+{
+	if( host.realtime >= vr_melee_window_until || !vr_melee_instant.value )
+		return;
+
+	if( !ent->v.owner || NUM_FOR_EDICT( ent->v.owner ) != 1 )
+		return;
+
+	if( ent->v.nextthink <= sv.time + sv.frametime || ent->v.nextthink > sv.time + 0.6f )
+		return;
+
+	if( Q_strnicmp( STRING( ent->v.classname ), "weapon_", 7 ))
+		return;
+
+	ent->v.nextthink = sv.time + 0.001f;
+}
+#endif
+
 static qboolean SV_RunThink( edict_t *ent )
 {
+#if !XASH_DEDICATED
+	SV_VRMeleeInstant( ent );
+#endif
+
 	if( !FBitSet( ent->v.flags, FL_KILLME ))
 	{
 		if( !SV_TryThink( ent, sv.frametime, sv.time ))

@@ -41,6 +41,8 @@ static CVAR_DEFINE_AUTO( vr_in_hand_valid, "0", 0, "(internal) right hand is tra
 static CVAR_DEFINE_AUTO( vr_in_hand_yaw, "0", 0, "(internal) aim yaw toward the right hand's target, relative to the body" );
 static CVAR_DEFINE_AUTO( vr_in_hand_pitch, "0", 0, "(internal) aim pitch toward the right hand's target" );
 static CVAR_DEFINE_AUTO( vr_in_ui_hit, "0", 0, "(internal) the right hand points at the UI panel" );
+CVAR_DEFINE_AUTO( vr_melee_instant, "1", FCVAR_ARCHIVE, "1 = a real swing makes the hit of the weapon land at once (the game waits 0.3 to 0.4 s after the attack before the hit)" );
+double vr_melee_window_until;	// read by the server (sv_phys.c): until then a melee hit that is waiting is brought forward
 static CVAR_DEFINE_AUTO( vr_swing_sound, "1", FCVAR_ARCHIVE, "1 = a real swing plays the weapon's swing sound at once, and the game's own late swing sound is muted" );
 static CVAR_DEFINE_AUTO( vr_swing_sounds, "swing+miss+slash+whoosh+woosh+whip", FCVAR_ARCHIVE, "name parts of the game's swing sounds (separated by +)" );
 static CVAR_DEFINE_AUTO( vr_melee_hit_sounds, "hitbod+hit_flesh+flesh+_hit", FCVAR_ARCHIVE, "name parts of the sounds of a hit that hurts someone (separated by +). The hand only vibrates when one plays right after a swing. vr_sound_debug 2 lists the sounds after a swing" );
@@ -554,6 +556,7 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_ui_hit );
 	Cvar_RegisterVariable( &vr_in_ui_lhit );
 	Cvar_RegisterVariable( &vr_in_ui_lkbd );
+	Cvar_RegisterVariable( &vr_melee_instant );
 	Cvar_RegisterVariable( &vr_swing_sound );
 	Cvar_RegisterVariable( &vr_swing_sounds );
 	Cvar_RegisterVariable( &vr_melee_hit_sounds );
@@ -994,6 +997,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			vr_lock_until = host.realtime + 0.8;
 
 			vr_swing_hold = host.realtime + vr_melee_hold.value;
+			vr_melee_window_until = host.realtime + 0.45;
 			S_VRSwingStart( vr_cur_weapon, 1 );
 
 			// a gun being whipped holds still on screen for a moment
@@ -1014,6 +1018,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			vr_lock_until = host.realtime + 0.8;
 
 			vr_lswing_hold = host.realtime + vr_melee_hold.value;
+			vr_melee_window_until = host.realtime + 0.45;
 			S_VRSwingStart( vr_cur_weapon, 0 );
 		}
 	}
