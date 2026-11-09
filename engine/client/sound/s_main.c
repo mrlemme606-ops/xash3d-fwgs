@@ -640,6 +640,76 @@ static qboolean S_VRNameInList( const char *list, const char *name )
 	return false;
 }
 
+/*
+=================
+VR melee sounds.
+- When you swing for real, the sound of that weapon's swing plays at once (the game plays it after its own delay). The
+  game's own swing sound that follows is muted. The sound of every weapon is learned from the first swing it makes.
+- A hand only vibrates when the swing really hit something that bleeds: a sound that matches vr_melee_hit_sounds plays
+  right after the swing.
+=================
+*/
+static double s_vr_swing_time = -10.0, s_vr_own_until;
+static int s_vr_swing_hand, s_vr_swing_weapon = -1;
+static qboolean s_vr_own_playing;
+static char s_vr_swing_name[64][96];
+
+void S_VRSwingStart( int weapon, int hand )
+{
+	convar_t *en = Cvar_FindVar( "vr_swing_sound" );
+
+	s_vr_swing_time = host.realtime;
+	s_vr_swing_hand = hand;
+	s_vr_swing_weapon = ( weapon >= 0 && weapon < 64 ) ? weapon : -1;
+
+	if( en && !en->value )
+		return;
+
+	if( s_vr_swing_weapon >= 0 && s_vr_swing_name[s_vr_swing_weapon][0] )
+	{
+		s_vr_own_playing = true;
+		S_StartLocalSound( s_vr_swing_name[s_vr_swing_weapon], VOL_NORM, false );
+		s_vr_own_playing = false;
+		s_vr_own_until = host.realtime + 1.0;
+	}
+}
+
+static qboolean S_VRSwingLogic( int ent, int chan, const sfx_t *sfx )
+{
+	convar_t *hit = Cvar_FindVar( "vr_melee_hit_sounds" ), *swing = Cvar_FindVar( "vr_swing_sounds" ), *dbg = Cvar_FindVar( "vr_sound_debug" );
+	double since = host.realtime - s_vr_swing_time;
+	qboolean mine = ( ent == cl.playernum + 1 || ent == cl.viewentity );
+
+	if( s_vr_own_playing || since < 0.0 || since > 1.2 )
+		return false;
+
+	if( dbg && dbg->value >= 2.0f )
+		Con_Printf( "VR sound after a swing (%.2f s): ent %d chan %d '%s'\n", since, ent, chan, sfx->name );
+
+	if( hit && hit->string[0] && S_VRNameInList( hit->string, sfx->name ))
+	{
+		convar_t *hap = Cvar_FindVar( "vr_in_haptic" ), *len = Cvar_FindVar( "vr_in_haptic_len" );
+
+		if( hap && len )
+		{
+			Cvar_DirectSetValue( len, 2200.0f );
+			Cvar_DirectSetValue( hap, s_vr_swing_hand ? 101.0f : 1.0f );	// 100 * hand (0 left, 1 right) + 1 pulse
+		}
+	}
+
+	if( mine && swing && swing->string[0] && S_VRNameInList( swing->string, sfx->name ))
+	{
+		// the game's own swing sound: it comes late, ours already played
+		if( host.realtime < s_vr_own_until )
+			return true;
+
+		if( s_vr_swing_weapon >= 0 )
+			Q_strncpy( s_vr_swing_name[s_vr_swing_weapon], sfx->name, sizeof( s_vr_swing_name[0] ));
+	}
+
+	return false;
+}
+
 static qboolean S_VRMuted( int ent, int chan, const sfx_t *sfx )
 {
 	static convar_t *on, *list, *own, *quiet, *steps;
@@ -709,6 +779,9 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
 	if( !snd.initialized ) return;
 	sfx = S_GetSfxByHandle( handle );
 	if( !sfx ) return;
+
+	if( S_VRSwingLogic( ent, chan, sfx ))
+		return;
 
 	// VR: climbing a ladder with the hands fires the ladder step sound many times a second
 	if( Q_stristr( sfx->name, "ladder" ))

@@ -16,12 +16,29 @@ the Free Software Foundation, either version 3 of the License, or
 
 void VR_InitCvars( void );
 
+// VR water reflections (gl_vr_water.c)
+struct msurface_s;
+void VR_WaterInit( void );
+void VR_WaterShutdown( void );
+void VR_WaterNote( const struct msurface_s *warp );
+void VR_WaterFrameStart( void );
+qboolean VR_WaterSetupPass( int eye, const ref_viewpass_t *eyepass, ref_viewpass_t *out );
+qboolean VR_WaterPassActive( void );
+const float *VR_WaterEyeOrigin( void );
+void VR_WaterSetupGL( void );
+void VR_WaterEndPass( void );
+qboolean VR_WaterBegin( void );
+void VR_WaterEnd( void );
+qboolean VR_SymProjActive( void );
+int VR_CurrentEye( void );
+
 // keeps Cry of Fear's client.dll renderer in step with the eye passes (gl_vr_cof.c)
 void VR_CofInitCvars( void );
 qboolean VR_CofActive( void );		// client.dll found, checked and the re-arm is switched on
 qboolean VR_CofFrameArmed( void );	// this frame's eye passes are being re-armed
 qboolean VR_CofKeepPrepass( void );
 qboolean VR_CofDualModel( char *out, int size );
+qboolean VR_CofSlotName( int slot, char *out, size_t size );
 qboolean VR_CofDrawDual( const float *origin, const float *pitch_yaw_roll );
 void VR_DrawDualWeapon( void );
 float VR_CofDepthMax( void );

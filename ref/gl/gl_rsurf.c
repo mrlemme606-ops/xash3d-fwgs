@@ -962,6 +962,13 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 
 	if( !warp->polys ) return;
 
+	// VR: the mirrored pass keeps only what is above the water, and the water itself is not part of it
+	if( VR_WaterPassActive( ))
+		return;
+
+	VR_WaterNote( warp );
+	const qboolean water_fx = VR_WaterBegin();
+
 	// set the current waveheight
 	if( warp->polys->verts[0][2] >= RI.rvp.vieworigin[2] )
 		waveHeight = -RI.currententity->curstate.scale;
@@ -1028,6 +1035,9 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 
 	if( useQuads )
 		pglEnd();
+
+	if( water_fx )
+		VR_WaterEnd();
 
 	GL_SetupFogColorForSurfaces();
 }

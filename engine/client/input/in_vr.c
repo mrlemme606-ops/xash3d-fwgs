@@ -41,6 +41,10 @@ static CVAR_DEFINE_AUTO( vr_in_hand_valid, "0", 0, "(internal) right hand is tra
 static CVAR_DEFINE_AUTO( vr_in_hand_yaw, "0", 0, "(internal) aim yaw toward the right hand's target, relative to the body" );
 static CVAR_DEFINE_AUTO( vr_in_hand_pitch, "0", 0, "(internal) aim pitch toward the right hand's target" );
 static CVAR_DEFINE_AUTO( vr_in_ui_hit, "0", 0, "(internal) the right hand points at the UI panel" );
+static CVAR_DEFINE_AUTO( vr_swing_sound, "1", FCVAR_ARCHIVE, "1 = a real swing plays the weapon's swing sound at once, and the game's own late swing sound is muted" );
+static CVAR_DEFINE_AUTO( vr_swing_sounds, "swing+miss+slash+whoosh+woosh+whip", FCVAR_ARCHIVE, "name parts of the game's swing sounds (separated by +)" );
+static CVAR_DEFINE_AUTO( vr_melee_hit_sounds, "hitbod+hit_flesh+flesh+_hit", FCVAR_ARCHIVE, "name parts of the sounds of a hit that hurts someone (separated by +). The hand only vibrates when one plays right after a swing. vr_sound_debug 2 lists the sounds after a swing" );
+static CVAR_DEFINE_AUTO( vr_melee_hold, "0.12", FCVAR_ARCHIVE, "seconds the attack button is held for a real swing" );
 static CVAR_DEFINE_AUTO( vr_in_qs_on, "0", 0, "(internal) the quick slot selector is open" );
 static CVAR_DEFINE_AUTO( vr_in_qs_sel, "0", 0, "(internal) the quick slot the hand is over (0 = none)" );
 static CVAR_DEFINE_AUTO( vr_in_qs_x, "0", 0, "(internal) where the selector opened, x" );
@@ -163,6 +167,10 @@ static qboolean vr_up_latched, vr_down_latched;
 static qboolean vr_crouch_toggled, vr_dodging, vr_qs_active, vr_lclick_down;
 static int vr_qs_sel;
 static vec3_t vr_qs_start;
+extern void S_VRSwingStart( int weapon, int hand );
+static int vr_cur_weapon = -1;
+static double vr_swing_hold, vr_lswing_hold;
+static float vr_qs_yaw;	// the way the hand pointed when the selector opened (radians): 1 2 3 run from its left to its right
 static double vr_a_since;
 static int vr_jump_frames;
 static qboolean vr_dir_down[4];	// forward, back, left, right (with hysteresis)
@@ -450,6 +458,9 @@ void IN_VRUserMsg( const char *name, const byte *buf, int size )
 	{
 		int weapon = buf[1], clip = (signed char)buf[2];
 
+		if( buf[0] )
+			vr_cur_weapon = weapon;
+
 		// the clip of every weapon is remembered on its own: the first shot after taking a weapon out used to be
 		// missed when the game announced another weapon in between
 		static int clip_of[256];
@@ -543,6 +554,10 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_ui_hit );
 	Cvar_RegisterVariable( &vr_in_ui_lhit );
 	Cvar_RegisterVariable( &vr_in_ui_lkbd );
+	Cvar_RegisterVariable( &vr_swing_sound );
+	Cvar_RegisterVariable( &vr_swing_sounds );
+	Cvar_RegisterVariable( &vr_melee_hit_sounds );
+	Cvar_RegisterVariable( &vr_melee_hold );
 	Cvar_RegisterVariable( &vr_in_qs_on );
 	Cvar_RegisterVariable( &vr_in_qs_sel );
 	Cvar_RegisterVariable( &vr_in_qs_x );
@@ -978,8 +993,8 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			vr_lock_yaw = cl.viewangles[YAW];
 			vr_lock_until = host.realtime + 0.8;
 
-			if( vr_in_swing_hit.value > 0.5f )
-				Cvar_DirectSetValue( &vr_in_haptic, 101.0f );
+			vr_swing_hold = host.realtime + vr_melee_hold.value;
+			S_VRSwingStart( vr_cur_weapon, 1 );
 
 			// a gun being whipped holds still on screen for a moment
 			if( vr_swing_whip && !vr_swing_fist )
@@ -998,8 +1013,8 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			vr_lock_yaw = cl.viewangles[YAW];
 			vr_lock_until = host.realtime + 0.8;
 
-			if( vr_in_lswing_hit.value > 0.5f )
-				Cvar_DirectSetValue( &vr_in_haptic, 1.0f );	// 0 * 100 + 1: left hand, one pulse
+			vr_lswing_hold = host.realtime + vr_melee_hold.value;
+			S_VRSwingStart( vr_cur_weapon, 0 );
 		}
 	}
 
@@ -1015,16 +1030,16 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	if( !in_game )
 		vr_swing_frames = 0;
 
-	if( vr_swing_frames > 0 )
+	if( vr_swing_frames > 0 || host.realtime < vr_swing_hold )
 	{
 		buttons |= BIT( vr_swing_fist ? VRB_FIST : ( vr_swing_whip ? VRB_WHIP : VRB_SWING ));
-		vr_swing_frames--;
+		if( vr_swing_frames > 0 ) vr_swing_frames--;
 	}
 
-	if( vr_lswing_frames > 0 )
+	if( vr_lswing_frames > 0 || host.realtime < vr_lswing_hold )
 	{
 		buttons |= BIT( VRB_FIST );
-		vr_lswing_frames--;
+		if( vr_lswing_frames > 0 ) vr_lswing_frames--;
 	}
 
 	if( vr_in_dual.value > 0.5f && vr_in_dual_lmelee.value < 0.5f && FBitSet( buttons, BIT( VRB_LTRIGGER )) && !FBitSet( buttons, BIT( VRB_RTRIGGER )))
@@ -1262,7 +1277,10 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		vr_qs_active = IN_VRGetRay( o, d );
 
 		if( vr_qs_active )
+		{
 			VectorCopy( o, vr_qs_start );
+			vr_qs_yaw = ( d[0] * d[0] + d[1] * d[1] > 0.09f ) ? atan2( d[1], d[0] ) : DEG2RAD( cl.viewangles[YAW] );
+		}
 	}
 	else if( y < 0.3f )
 	{
@@ -1282,7 +1300,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	if( vr_qs_active )
 	{
 		vec3_t o, d, right;
-		float yaw = DEG2RAD( cl.viewangles[YAW] ), side, up;
+		float yaw = vr_qs_yaw, side, up;
 
 		vr_qs_sel = 0;
 
@@ -1294,9 +1312,9 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			side = ( o[0] - vr_qs_start[0] ) * right[0] + ( o[1] - vr_qs_start[1] ) * right[1];
 			up = o[2] - vr_qs_start[2];
 
-			if( side < -5.0f ) vr_qs_sel = 1;
-			else if( side > 5.0f ) vr_qs_sel = 3;
-			else if( up > 6.0f ) vr_qs_sel = 2;
+			if( side < -4.0f ) vr_qs_sel = 1;
+			else if( side > 4.0f ) vr_qs_sel = 3;
+			else if( up > 5.5f ) vr_qs_sel = 2;
 		}
 	}
 
@@ -1309,7 +1327,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 		Cvar_DirectSetValue( &vr_in_qs_x, vr_qs_start[0] );
 		Cvar_DirectSetValue( &vr_in_qs_y, vr_qs_start[1] );
 		Cvar_DirectSetValue( &vr_in_qs_z, vr_qs_start[2] );
-		Cvar_DirectSetValue( &vr_in_qs_yaw, cl.viewangles[YAW] );
+		Cvar_DirectSetValue( &vr_in_qs_yaw, RAD2DEG( vr_qs_yaw ));
 	}
 
 	if( y < -0.7f && !vr_down_latched )

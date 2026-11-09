@@ -520,8 +520,9 @@ R_FindViewLeaf
 */
 void R_FindViewLeaf( void )
 {
+	// (in the mirrored water pass the real eye decides, not its mirror image under the water: water fog, contents)
 	RI.oldviewleaf = RI.viewleaf;
-	RI.viewleaf = gEngfuncs.Mod_PointInLeaf( RI.rvp.vieworigin, WORLDMODEL->nodes, WORLDMODEL );
+	RI.viewleaf = gEngfuncs.Mod_PointInLeaf( VR_WaterPassActive() ? VR_WaterEyeOrigin() : RI.rvp.vieworigin, WORLDMODEL->nodes, WORLDMODEL );
 }
 
 /*
@@ -597,6 +598,8 @@ void R_SetupGL( qboolean set_gl_state )
 	pglDisable( GL_BLEND );
 	pglDisable( GL_ALPHA_TEST );
 	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+
+	VR_WaterSetupGL();	// the mirrored water pass: small viewport and clip plane
 }
 
 /*
@@ -1224,6 +1227,7 @@ void R_RenderFrame( const ref_viewpass_t *rvp )
 		R_SetupRefParams( rvp );
 		tr.fCustomRendering = false;
 		VR_CofBeginFrame();
+		VR_WaterFrameStart();
 		R_RunViewmodelEvents();
 		tr.realframecount++;
 
@@ -1252,6 +1256,19 @@ void R_RenderFrame( const ref_viewpass_t *rvp )
 		{
 			eye = order[pass];
 			VR_SetupEyeView( eye, rvp, &eyepass );
+
+			// water in view: the scene as seen from under the water first, for the reflection
+			{
+				ref_viewpass_t waterpass;
+
+				if( VR_WaterSetupPass( eye, &eyepass, &waterpass ))
+				{
+					R_SetupRefParams( &waterpass );
+					R_RenderScene();
+					VR_WaterEndPass();
+				}
+			}
+
 			R_SetupRefParams( &eyepass );
 			R_RenderScene();
 			VR_EndEyePass( eye );

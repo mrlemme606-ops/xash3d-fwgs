@@ -228,6 +228,8 @@ static CVAR_DEFINE_AUTO( vr_muzzle_z, "0", FCVAR_ARCHIVE, "muzzle: up" );
 static CVAR_DEFINE_AUTO( vr_dual_own, "1", FCVAR_ARCHIVE, "1 = hide the game's own picture of the left weapon in the dual wield (the one in front of your body) and show only the one on your hand" );
 static CVAR_DEFINE_AUTO( vr_dual_debug, "0", 0, "1 = print once a second whether the left weapon of a dual wield was placed at your hand" );
 static CVAR_DEFINE_AUTO( vr_dual_builtin, "1", FCVAR_ARCHIVE, "1 = the left weapon of a dual wield is drawn by the engine's own studio renderer (it then turns with your hand). 0 = the game's renderer" );
+static CVAR_DEFINE_AUTO( vr_melee_aim, "1", FCVAR_ARCHIVE, "1 = a swing is aimed at where the tip of the weapon is. 0 = the old way, along the direction of the swing" );
+static CVAR_DEFINE_AUTO( vr_melee_lead, "6", FCVAR_ARCHIVE, "how far ahead of the tip (game units, along the swing) a swing is aimed" );
 static CVAR_DEFINE_AUTO( vr_hand_collide, "0", 0, "1 = the weapon in your hand is pushed back by walls instead of going through them" );
 static CVAR_DEFINE_AUTO( vr_hand_reach, "18", FCVAR_ARCHIVE, "how far in front of the hand the weapon counts as touching a wall (units)" );
 static CVAR_DEFINE_AUTO( vr_anim_play, "shoot+fire+reload+shot", FCVAR_ARCHIVE, "animations of a weapon that play (part of the animation name, separated by +). All others hold the idle pose. A weapon can have its own choice (vr_anim_toggle, saved with vr_weapon_save)" );
@@ -324,6 +326,7 @@ static void VR_VMInfo_f( void );
 static void VR_GLInfo_f( void );
 static void VR_Ents_f( void );
 static void VR_WeaponSave_f( void );
+static void VR_WeaponSaveLeft_f( void );
 static void VR_Center_f( void );
 static void VR_HideCrosshair( void );
 
@@ -390,6 +393,8 @@ static void VR_CaptureTuneDefaults( void );
 
 void VR_InitCvars( void )
 {
+	VR_WaterInit();
+
 	// before anything is registered the cvars still hold the defaults from this file, not what an old config saved
 	VR_CaptureTuneDefaults();
 
@@ -434,6 +439,8 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_roll );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_scale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_collide );
+	gEngfuncs.Cvar_RegisterVariable( &vr_melee_aim );
+	gEngfuncs.Cvar_RegisterVariable( &vr_melee_lead );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_builtin );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_own );
@@ -530,6 +537,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cmd_AddCommand( "vr_ents", VR_Ents_f, "list the things drawn in this scene (model, render fx, distance, size). \"vr_ents all\" lists everything" );
 	gEngfuncs.Cmd_AddCommand( "vr_gl_info", VR_GLInfo_f, "print which OpenGL driver / opengl32.dll the game is using" );
 	gEngfuncs.Cmd_AddCommand( "vr_weapon_reset", VR_WeaponReset_f, "put the weapon in hand back to the default position/size and overwrite its saved file" );
+	gEngfuncs.Cmd_AddCommand( "vr_weapon_save_left", VR_WeaponSaveLeft_f, "save the left hand position of the weapon you dual wield on the left (vr_dual_x/y/z/pitch/yaw/roll/scale)" );
 	gEngfuncs.Cmd_AddCommand( "vr_weapon_save", VR_WeaponSave_f, "save the current weapon position/size settings for the weapon you are holding" );
 	gEngfuncs.Cmd_AddCommand( "vr_recenter", VR_Recenter_f, "recenter the VR view on the current head position and direction" );
 }
@@ -856,7 +864,20 @@ static float VR_SwingHand( int hand, const ref_viewpass_t *game, const vec3_t ey
 			VR_RotateZ( tmp, d, dir );
 
 			VectorMA( vr.hand[hand].pos, vr_melee_tip.value, vr.hand[hand].fwd, tip );
-			hit = VR_TraceRay( tip, dir, vr_melee_reach.value, eye, target );
+
+			if( vr_melee_aim.value )
+			{
+				// the game hits what is in front of the crosshair, from its own eye. A swing moves sideways, so
+				// aiming along the swing (the old way) sent the hit past the enemy. Aim at where the tip IS, a little
+				// ahead of it: the enemy you see the weapon touch is what gets hit
+				VectorMA( tip, vr_melee_lead.value, dir, target );
+				hit = false;
+			}
+			else
+			{
+				hit = VR_TraceRay( tip, dir, vr_melee_reach.value, eye, target );
+			}
+
 			VR_AimAngles( eye, target, game->viewangles[YAW], &pitch, &yaw );
 
 			gEngfuncs.Cvar_SetValue( cv_pitch, pitch );
@@ -1851,6 +1872,64 @@ static float VR_WeaponNumber( const char *base, const char *key, float def )
 	return v;
 }
 
+// the left hand weapon of a dual wield has its own settings per weapon (vr_dual_x ... vr_dual_scale), saved with
+// vr_weapon_save_left in vr_weaponleft_<weapon>.cfg and loaded again whenever that weapon is in the left hand
+static char vr_dual_model[64];
+
+static const char *vr_dual_keys[] = { "vr_dual_x", "vr_dual_y", "vr_dual_z", "vr_dual_pitch", "vr_dual_yaw", "vr_dual_roll", "vr_dual_scale" };
+
+static void VR_DualFileName( const char *model, char *out, size_t size )
+{
+	char base[48];
+
+	VR_ModelBaseName( model, base, sizeof( base ));
+	Q_snprintf( out, size, "vr_weaponleft_%s.cfg", base );
+}
+
+static void VR_DualLoadSettings( const char *model )
+{
+	char file[96], cmd[128];
+	int i;
+
+	Q_strncpy( vr_dual_model, model, sizeof( vr_dual_model ));
+
+	for( i = 0; i < ARRAYSIZE( vr_dual_keys ); i++ )
+		gEngfuncs.Cvar_SetValue( vr_dual_keys[i], ( i == 6 ) ? 1.0f : 0.0f );
+
+	VR_DualFileName( model, file, sizeof( file ));
+
+	if( gEngfuncs.fsapi->FileExists( file, false ))
+	{
+		Q_snprintf( cmd, sizeof( cmd ), "exec %s\n", file );
+		gEngfuncs.Cbuf_AddText( cmd );
+	}
+}
+
+static void VR_WeaponSaveLeft_f( void )
+{
+	char text[512], file[96];
+	int i, len = 0;
+
+	if( !vr_dual_model[0] )
+	{
+		gEngfuncs.Con_Printf( "VR: dual wield a weapon first\n" );
+		return;
+	}
+
+	for( i = 0; i < ARRAYSIZE( vr_dual_keys ); i++ )
+	{
+		cvar_t *cv = gEngfuncs.pfnGetCvarPointer( vr_dual_keys[i] );
+
+		len += Q_snprintf( text + len, sizeof( text ) - len, "%s %g\n", vr_dual_keys[i], cv ? cv->value : 0.0f );
+	}
+
+	VR_DualFileName( vr_dual_model, file, sizeof( file ));
+
+	if( gEngfuncs.fsapi->WriteFile( file, text, len ))
+		gEngfuncs.Con_Printf( "VR: saved the left hand settings of %s to %s\n", vr_dual_model, file );
+	else gEngfuncs.Con_Printf( S_ERROR "VR: can't write %s\n", file );
+}
+
 static qboolean VR_GetDualPose( const char *model, vec3_t origin, float *vang, float *scale )
 {
 	char base[48];
@@ -1912,6 +1991,9 @@ void VR_DrawDualWeapon( void )
 
 	if( !vr_dual.value || !vr.in_eye_pass || !VR_CofDualModel( model, sizeof( model )))
 		return;
+
+	if( Q_stricmp( vr_dual_model, model ))
+		VR_DualLoadSettings( model );
 
 	if( !VR_GetDualPose( model, origin, vang, &scale ))
 		return;
@@ -2619,6 +2701,16 @@ qboolean VR_BeginMainPass( const ref_viewpass_t *game )
 void *VR_GetSystemTable( void )
 {
 	return vr.system;
+}
+
+qboolean VR_SymProjActive( void )
+{
+	return vr_sym_proj.value != 0.0f;
+}
+
+int VR_CurrentEye( void )
+{
+	return vr.cur_eye;
 }
 
 qboolean VR_IsActive( void )
@@ -3527,14 +3619,10 @@ static void VR_DrawQuickSlots( void )
 	// the player's right, the same way the engine works out which slot the hand is over
 	VectorSet( rightv, sin( yaw ), -cos( yaw ), 0.0f );
 
-	// the boxes face the eye
-	VectorSubtract( RI.rvp.vieworigin, start, to_eye );
-	to_eye[2] = 0.0f;
-	len = VectorLength( to_eye );
-	if( len < 0.001f ) return;
-	VectorScale( to_eye, 1.0f / len, to_eye );
-	VectorSet( br, -to_eye[1], to_eye[0], 0.0f );	// screen right for someone looking along -to_eye
+	// the boxes stand in the plane across the way the hand points: 1, 2, 3 run from the left to the right of the hand
+	VectorCopy( rightv, br );
 	VectorCopy( upv, bu );
+	(void)to_eye; (void)len;
 
 	Matrix4x4_ToArrayFloatGL( RI.projectionMatrix, proj );
 	Matrix4x4_ToArrayFloatGL( RI.worldviewMatrix, view );
@@ -3565,47 +3653,90 @@ static void VR_DrawQuickSlots( void )
 
 	for( i = 0; i < 3; i++ )
 	{
-		// slot 1 on the left, 2 above, 3 on the right of where the stick was pushed
-		float ox = ( i == 0 ) ? -11.0f : ( i == 2 ? 11.0f : 0.0f );
-		float oz = ( i == 1 ) ? 12.0f : 5.0f, h = 4.0f;
+		// slot 1 left, 2 above, 3 right of the point where the stick was pushed (the engine uses the same numbers)
+		static char loaded[3][64];
+		static int tex[3];
+		char name[64], path[128];
+		float ox = ( i == 0 ) ? -8.0f : ( i == 2 ? 8.0f : 0.0f );
+		float oz = ( i == 1 ) ? 8.0f : 3.0f, hw = 3.2f, hh = 1.8f;
 		vec3_t c, p[4];
-		int on_this = ( selected == i + 1 );
+		int on_this = ( selected == i + 1 ), has_tex = 0;
 
 		VectorMA( start, ox, rightv, c );
 		c[2] += oz;
 
 		for( k = 0; k < 4; k++ )
 		{
-			float sx = ( k == 0 || k == 3 ) ? -h : h, sy = ( k < 2 ) ? -h : h;
+			float sx = ( k == 0 || k == 3 ) ? -hw : hw, sy = ( k < 2 ) ? -hh : hh;
 
 			VectorMA( c, sx, br, p[k] );
 			VectorMA( p[k], sy, bu, p[k] );
 		}
 
+		// what the game says is in this slot: the logo of the weapon (gfx/vgui/weapons/<name>/640_<name>_slot.tga)
+		if( VR_CofSlotName( i + 1, name, sizeof( name )))
+		{
+			if( Q_stricmp( loaded[i], name ))
+			{
+				Q_strncpy( loaded[i], name, sizeof( loaded[i] ));
+				Q_snprintf( path, sizeof( path ), "gfx/vgui/weapons/%s/640_%s_slot.tga", name, name );
+				tex[i] = GL_LoadTexture( path, NULL, 0, TF_NOMIPMAP | TF_CLAMP );
+			}
+
+			has_tex = tex[i] > 0;
+		}
+		else
+		{
+			loaded[i][0] = 0;
+			tex[i] = 0;
+		}
+
 		pglBegin( GL_QUADS );
-		if( on_this ) pglColor4f( 0.85f, 0.65f, 0.1f, 0.9f );
-		else pglColor4f( 0.05f, 0.05f, 0.05f, 0.75f );
+		if( on_this ) pglColor4f( 0.85f, 0.65f, 0.1f, 0.85f );
+		else pglColor4f( 0.05f, 0.05f, 0.05f, 0.7f );
 		for( k = 0; k < 4; k++ )
 			pglVertex3f( p[k][0], p[k][1], p[k][2] );
 		pglEnd();
 
-		pglLineWidth( on_this ? 4.0f : 2.0f );
+		if( has_tex )
+		{
+			static const float uv[4][2] = { { 0, 1 }, { 1, 1 }, { 1, 0 }, { 0, 0 } };
+
+			GL_SelectTexture( 0 );
+			pglEnable( GL_TEXTURE_2D );
+			GL_Bind( 0, tex[i] );
+			pglBegin( GL_QUADS );
+			pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+			for( k = 0; k < 4; k++ )
+			{
+				pglTexCoord2f( uv[k][0], uv[k][1] );
+				pglVertex3f( p[k][0], p[k][1], p[k][2] );
+			}
+			pglEnd();
+			pglDisable( GL_TEXTURE_2D );
+		}
+
+		pglLineWidth( on_this ? 3.0f : 1.5f );
 		pglBegin( GL_LINE_LOOP );
 		pglColor4f( 1.0f, 1.0f, 1.0f, 0.9f );
 		for( k = 0; k < 4; k++ )
 			pglVertex3f( p[k][0], p[k][1], p[k][2] );
 		pglEnd();
 
-		pglBegin( GL_LINE_STRIP );
-		for( k = 0; k < glyph_n[i]; k++ )
+		// nothing in the slot: its number
+		if( !has_tex )
 		{
-			vec3_t g;
+			pglBegin( GL_LINE_STRIP );
+			for( k = 0; k < glyph_n[i]; k++ )
+			{
+				vec3_t g;
 
-			VectorMA( c, glyph[i][k * 2] * h * 1.1f, br, g );
-			VectorMA( g, glyph[i][k * 2 + 1] * h * 1.1f, bu, g );
-			pglVertex3f( g[0], g[1], g[2] );
+				VectorMA( c, glyph[i][k * 2] * hh * 1.1f, br, g );
+				VectorMA( g, glyph[i][k * 2 + 1] * hh * 1.1f, bu, g );
+				pglVertex3f( g[0], g[1], g[2] );
+			}
+			pglEnd();
 		}
-		pglEnd();
 	}
 
 	pglMatrixMode( GL_MODELVIEW );

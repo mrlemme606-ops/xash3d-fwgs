@@ -67,6 +67,7 @@ static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepas
 #define COF_DUAL_NAME		0x10545870u	// char[64] model of the weapon in the left hand (DualWield message)
 #define COF_DUAL_MODE		0x105458B0u	// 3 = a weapon model
 #define COF_VANGLES		0x1055962Cu	// 3 floats: view pitch (down positive), yaw, roll
+#define COF_SLOT_NAMES	0x1018D024u	// the hotkey slots: three names of 128 bytes ("weapon_switchblade"...), written by the QSlotUpdate message
 #define COF_ENT_A		0x10550E90u	// origin[3] then angles[3] of the entity the secondary weapon is drawn from (cl_entity_t.origin / angles)
 #define COF_ENT_B		0x10550608u	// the same in its curstate (origin[3], angles[3])
 #define COF_VORIGIN		0x10559638u	// 3 floats: view origin the secondary view models are drawn at
@@ -91,6 +92,7 @@ static struct
 	int		*dualmode;
 	float		*vangles, *vorigin;
 	float		*ent_a, *ent_b;
+	char		*slots;
 	qboolean	ent_ok;
 	float		s_vo[3], s_va[3];
 	int		hid_secondary;
@@ -271,6 +273,7 @@ static void COF_Resolve( void )
 		{
 			static const unsigned ent_vars[] = { COF_ENT_A, COF_ENT_B };
 
+			cof.slots = (char *)( base + COF_RVA( COF_SLOT_NAMES ));
 			cof.ent_a = (float *)( base + COF_RVA( COF_ENT_A ));
 			cof.ent_b = (float *)( base + COF_RVA( COF_ENT_B ));
 			cof.ent_ok = COF_CodeRefs( base, COF_FN_SECONDARY, 0x1000, ent_vars, 2 )
@@ -603,6 +606,29 @@ qboolean VR_CofDualModel( char *out, int size )
 
 	Q_strncpy( out, cof.dualname, size );
 	return true;
+#else
+	return false;
+#endif
+}
+
+// what is in hotkey slot 1..3 (the weapon's name without the "weapon_"), empty when nothing
+qboolean VR_CofSlotName( int slot, char *out, size_t size )
+{
+	out[0] = 0;
+#if defined( _WIN32 )
+	if( !cof.ok || !cof.slots || slot < 1 || slot > 3 )
+		return false;
+
+	if( !COF_Readable( cof.slots + ( slot - 1 ) * 128, 128, false ))
+		return false;
+
+	Q_strncpy( out, cof.slots + ( slot - 1 ) * 128, Q_min( size, (size_t)127 ));
+	out[Q_min( size, (size_t)127 ) - 1] = 0;
+
+	if( !Q_strnicmp( out, "weapon_", 7 ))
+		memmove( out, out + 7, strlen( out + 7 ) + 1 );
+
+	return out[0] != 0;
 #else
 	return false;
 #endif

@@ -1382,6 +1382,7 @@ R_Shutdown
 */
 void R_Shutdown( void )
 {
+	VR_WaterShutdown();	// give the game's own water effect back
 	if( !glw_state.initialized )
 		return;
 

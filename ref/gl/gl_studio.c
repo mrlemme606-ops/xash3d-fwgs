@@ -4068,6 +4068,10 @@ void R_DrawViewModel( void )
 {
 	cl_entity_t	*view = tr.viewent;
 
+	// the reflection has no weapon in it
+	if( VR_WaterPassActive( ))
+		return;
+
 	R_GatherPlayerLight( view );
 
 	if( r_drawviewmodel->value == 0 )
