@@ -144,6 +144,7 @@ static float m_flGaitMovement;
 static int g_nTopColor, g_nBottomColor;	// remap colors
 static int g_nFaceFlags, g_nForceFaceFlags;
 static void R_VRScopeTrack( cl_entity_t *view );
+static qboolean r_cull_flipped;	// culling was switched off by the mirrored-weapon code
 static qboolean r_vr_mirror;		// the weapon is drawn mirrored (a left-handed weapon held in the right hand)
 static qboolean r_dual_on;	// the left weapon of a dual wield is being drawn: it is placed at the left hand
 static char r_dual_name[64];
@@ -2262,17 +2263,23 @@ static void R_StudioDrawPoints( void )
 	// backface culling through TriAPI call
 	//
 	// see https://github.com/FWGS/xash3d-fwgs/issues/2517
-	if( glState.faceCull != GL_NONE )
+	//
+	// VR: a mirrored weapon (the flare) switches culling off for itself. The check above then saw "culling is off" for the
+	// next model and skipped the else branch, so culling stayed off for the hands, and their cut-open arms showed their
+	// inside. Remember that culling was switched off by this very code, so it is switched back on
+	if( glState.faceCull != GL_NONE || r_cull_flipped )
 	{
 		if( R_AllowFlipViewModel( RI.currententity ) || ( r_vr_mirror && RI.currententity == tr.viewent ))
 		{
 			tr.fFlipViewModel = true;
 			GL_Cull( GL_NONE );
+			r_cull_flipped = true;
 		}
 		else
 		{
 			tr.fFlipViewModel = false;
 			GL_Cull( GL_FRONT );
+			r_cull_flipped = false;
 		}
 	}
 

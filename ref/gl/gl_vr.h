@@ -22,7 +22,7 @@ qboolean VR_CofActive( void );		// client.dll found, checked and the re-arm is s
 qboolean VR_CofFrameArmed( void );	// this frame's eye passes are being re-armed
 qboolean VR_CofKeepPrepass( void );
 qboolean VR_CofDualModel( char *out, int size );
-void VR_CofDrawDual( const float *origin, const float *pitch_yaw_roll );
+qboolean VR_CofDrawDual( const float *origin, const float *pitch_yaw_roll );
 void VR_DrawDualWeapon( void );
 float VR_CofDepthMax( void );
 void VR_CofBeginFrame( void );

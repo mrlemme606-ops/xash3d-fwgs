@@ -41,6 +41,12 @@ static CVAR_DEFINE_AUTO( vr_in_hand_valid, "0", 0, "(internal) right hand is tra
 static CVAR_DEFINE_AUTO( vr_in_hand_yaw, "0", 0, "(internal) aim yaw toward the right hand's target, relative to the body" );
 static CVAR_DEFINE_AUTO( vr_in_hand_pitch, "0", 0, "(internal) aim pitch toward the right hand's target" );
 static CVAR_DEFINE_AUTO( vr_in_ui_hit, "0", 0, "(internal) the right hand points at the UI panel" );
+static CVAR_DEFINE_AUTO( vr_in_qs_on, "0", 0, "(internal) the quick slot selector is open" );
+static CVAR_DEFINE_AUTO( vr_in_qs_sel, "0", 0, "(internal) the quick slot the hand is over (0 = none)" );
+static CVAR_DEFINE_AUTO( vr_in_qs_x, "0", 0, "(internal) where the selector opened, x" );
+static CVAR_DEFINE_AUTO( vr_in_qs_y, "0", 0, "(internal) where the selector opened, y" );
+static CVAR_DEFINE_AUTO( vr_in_qs_z, "0", 0, "(internal) where the selector opened, z" );
+static CVAR_DEFINE_AUTO( vr_in_qs_yaw, "0", 0, "(internal) body yaw while the selector is open" );
 static CVAR_DEFINE_AUTO( vr_in_ui_lkbd, "0", 0, "(internal) the left hand points at a key of the computer keyboard" );
 static CVAR_DEFINE_AUTO( vr_in_ui_lhit, "0", 0, "(internal) the left hand points at the UI panel" );
 static CVAR_DEFINE_AUTO( vr_in_ui_lx, "0", 0, "(internal) left hand: where on the UI panel, 0..1 from the left" );
@@ -281,7 +287,8 @@ static void IN_VRDrawQuickSlots( void )
 	int x0 = ( w - c * 3 - 2 * ( c / 8 )) / 2, y0 = h - c - h / 12;
 	rgba_t white = { 255, 255, 255, 255 };
 
-	if( !vr_qs_active )
+	// the slots are drawn in the world by the renderer now (above the right hand); the flat bar is only for flat play
+	if( !vr_qs_active || Cvar_VariableInteger( "vr_enable" ))
 		return;
 
 	ref.dllFuncs.R_Set2DMode( true );
@@ -536,6 +543,12 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_ui_hit );
 	Cvar_RegisterVariable( &vr_in_ui_lhit );
 	Cvar_RegisterVariable( &vr_in_ui_lkbd );
+	Cvar_RegisterVariable( &vr_in_qs_on );
+	Cvar_RegisterVariable( &vr_in_qs_sel );
+	Cvar_RegisterVariable( &vr_in_qs_x );
+	Cvar_RegisterVariable( &vr_in_qs_y );
+	Cvar_RegisterVariable( &vr_in_qs_z );
+	Cvar_RegisterVariable( &vr_in_qs_yaw );
 	Cvar_RegisterVariable( &vr_in_ui_lx );
 	Cvar_RegisterVariable( &vr_in_ui_ly );
 	Cvar_RegisterVariable( &vr_in_ui_x );
@@ -941,7 +954,9 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	// a one handed item or nothing, or the left weapon of a dual wield
 	{
 		qboolean right_ok = vr_in_melee.value > 0.5f || ( !COM_StringEmptyOrNULL( vr_key_whip.string ) && vr_in_dual.value < 0.5f );
-		qboolean left_ok = vr_in_fists.value > 0.5f || vr_in_oneh.value > 0.5f || ( vr_in_dual.value > 0.5f && vr_in_dual_lmelee.value > 0.5f );
+		// dual wield: only a left MELEE weapon swings. (A left gun with a phone or flare on the right used to count the phone as
+		// a free hand, so swinging the left hand sent the attack key of the left gun and it fired)
+		qboolean left_ok = ( vr_in_dual.value > 0.5f ) ? ( vr_in_dual_lmelee.value > 0.5f ) : ( vr_in_fists.value > 0.5f || vr_in_oneh.value > 0.5f );
 		float thr = vr_melee_speed.value;
 
 		if( vr_in_hand_speed.value < thr * 0.45f )
@@ -1283,6 +1298,18 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			else if( side > 5.0f ) vr_qs_sel = 3;
 			else if( up > 6.0f ) vr_qs_sel = 2;
 		}
+	}
+
+	// the renderer draws the three slots in the world, above the hand, where the stick was pushed forward
+	Cvar_DirectSetValue( &vr_in_qs_on, vr_qs_active ? 1.0f : 0.0f );
+	Cvar_DirectSetValue( &vr_in_qs_sel, vr_qs_active ? (float)vr_qs_sel : 0.0f );
+
+	if( vr_qs_active )
+	{
+		Cvar_DirectSetValue( &vr_in_qs_x, vr_qs_start[0] );
+		Cvar_DirectSetValue( &vr_in_qs_y, vr_qs_start[1] );
+		Cvar_DirectSetValue( &vr_in_qs_z, vr_qs_start[2] );
+		Cvar_DirectSetValue( &vr_in_qs_yaw, cl.viewangles[YAW] );
 	}
 
 	if( y < -0.7f && !vr_down_latched )

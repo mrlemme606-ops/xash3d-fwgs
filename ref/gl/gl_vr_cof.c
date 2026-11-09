@@ -67,6 +67,8 @@ static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepas
 #define COF_DUAL_NAME		0x10545870u	// char[64] model of the weapon in the left hand (DualWield message)
 #define COF_DUAL_MODE		0x105458B0u	// 3 = a weapon model
 #define COF_VANGLES		0x1055962Cu	// 3 floats: view pitch (down positive), yaw, roll
+#define COF_ENT_A		0x10550E90u	// origin[3] then angles[3] of the entity the secondary weapon is drawn from (cl_entity_t.origin / angles)
+#define COF_ENT_B		0x10550608u	// the same in its curstate (origin[3], angles[3])
 #define COF_VORIGIN		0x10559638u	// 3 floats: view origin the secondary view models are drawn at
 #define COF_FN_SECONDARY	0x1008C7E0u
 #define COF_SCREENSZ		0x1018F430u	// int width, height the water effect copies from the screen
@@ -88,6 +90,8 @@ static struct
 	char		*dualname;
 	int		*dualmode;
 	float		*vangles, *vorigin;
+	float		*ent_a, *ent_b;
+	qboolean	ent_ok;
 	float		s_vo[3], s_va[3];
 	int		hid_secondary;
 	qboolean	dual_ok;
@@ -264,6 +268,15 @@ static void COF_Resolve( void )
 		cof.dualmode = (int *)( base + COF_RVA( COF_DUAL_MODE ));
 		cof.vangles = (float *)( base + COF_RVA( COF_VANGLES ));
 		cof.vorigin = (float *)( base + COF_RVA( COF_VORIGIN ));
+		{
+			static const unsigned ent_vars[] = { COF_ENT_A, COF_ENT_B };
+
+			cof.ent_a = (float *)( base + COF_RVA( COF_ENT_A ));
+			cof.ent_b = (float *)( base + COF_RVA( COF_ENT_B ));
+			cof.ent_ok = COF_CodeRefs( base, COF_FN_SECONDARY, 0x1000, ent_vars, 2 )
+				&& COF_Readable( cof.ent_a, 24, true ) && COF_Readable( cof.ent_b, 24, true );
+		}
+
 		cof.dual_ok = COF_CodeRefs( base, COF_FN_SECONDARY, 0x900, dual_vars, 2 )
 			&& COF_Readable( cof.dualname, 64, false ) && COF_Readable( cof.dualmode, 4, false )
 			&& COF_Readable( cof.vangles, 12, true ) && COF_Readable( cof.vorigin, 12, true ) && COF_Readable( (void *)cof.secondary, 4, true );
@@ -595,15 +608,18 @@ qboolean VR_CofDualModel( char *out, int size )
 #endif
 }
 
-// draw that weapon with the view origin and angles of the left hand
-void VR_CofDrawDual( const float *origin, const float *pitch_yaw_roll )
+// draw that weapon at the left hand. In this mode the game does NOT use the view origin and angles for it: the weapon is a
+// whole entity inside client.dll, and its position comes from the game's own view calculation, once per frame. So the
+// entity's origin and angles are written here, right before it is drawn, and put back afterwards
+qboolean VR_CofDrawDual( const float *origin, const float *pitch_yaw_roll )
 {
+	qboolean wrote = false;
 #if defined( _WIN32 )
-	float so[3], sa[3];
+	float so[3], sa[3], ea[6], eb[6];
 	int sflag;
 
 	if( !cof.ok || !cof.dual_ok )
-		return;
+		return false;
 
 	memcpy( so, cof.vorigin, sizeof( so ));
 	memcpy( sa, cof.vangles, sizeof( sa ));
@@ -613,12 +629,30 @@ void VR_CofDrawDual( const float *origin, const float *pitch_yaw_roll )
 	memcpy( cof.vangles, pitch_yaw_roll, sizeof( sa ));
 	*cof.secondary = 1;
 
+	if( cof.ent_ok )
+	{
+		float pose[6] = { origin[0], origin[1], origin[2], -pitch_yaw_roll[0], pitch_yaw_roll[1], pitch_yaw_roll[2] };
+
+		memcpy( ea, cof.ent_a, sizeof( ea ));
+		memcpy( eb, cof.ent_b, sizeof( eb ));
+		memcpy( cof.ent_a, pose, sizeof( pose ));
+		memcpy( cof.ent_b, pose, sizeof( pose ));
+		wrote = true;
+	}
+
 	gEngfuncs.pfnDrawNormalTriangles();
+
+	if( wrote )
+	{
+		memcpy( cof.ent_a, ea, sizeof( ea ));
+		memcpy( cof.ent_b, eb, sizeof( eb ));
+	}
 
 	*cof.secondary = sflag;
 	memcpy( cof.vorigin, so, sizeof( so ));
 	memcpy( cof.vangles, sa, sizeof( sa ));
 #endif
+	return wrote;
 }
 
 qboolean VR_CofKeepPrepass( void )
