@@ -256,7 +256,7 @@ static void SV_VRMeleeInstant( edict_t *ent )
 	if( ent->v.nextthink <= sv.time + sv.frametime || ent->v.nextthink > sv.time + 0.6f )
 		return;
 
-	if( Q_strnicmp( STRING( ent->v.classname ), "weapon_", 7 ))
+	if( Q_strnicmp( SV_GetString( ent->v.classname ), "weapon_", 7 ))
 		return;
 
 	ent->v.nextthink = sv.time + 0.001f;

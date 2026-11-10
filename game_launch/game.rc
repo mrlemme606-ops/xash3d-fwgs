@@ -15,13 +15,13 @@
 
 #define VER_COMPANYNAME_STR	"Flying With Gauss"
 #define VER_LEGALCOPYRIGHT_STR	"Flying With Gauss"
-#define VER_PRODUCTNAME_STR	"Xash3D Launcher"
+#define VER_PRODUCTNAME_STR	"Cry of Fear VR"
 
 #define VER_ANSICP
 
-#define VER_FILEDESCRIPTION_STR		"Xash3D FWGS Launcher"
-#define VER_ORIGINALFILENAME_STR	"xash.exe"
-#define VER_INTERNALNAME_STR		"xash"
+#define VER_FILEDESCRIPTION_STR		"Cry of Fear VR"
+#define VER_ORIGINALFILENAME_STR	"cofvr.exe"
+#define VER_INTERNALNAME_STR		"cofvr"
 
 #include <common.ver>
 
