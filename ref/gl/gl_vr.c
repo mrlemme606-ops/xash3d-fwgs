@@ -227,8 +227,14 @@ static CVAR_DEFINE_AUTO( vr_muzzle_y, "0", FCVAR_ARCHIVE, "muzzle: sideways" );
 static CVAR_DEFINE_AUTO( vr_muzzle_z, "0", FCVAR_ARCHIVE, "muzzle: up" );
 static CVAR_DEFINE_AUTO( vr_dual_own, "1", FCVAR_ARCHIVE, "1 = hide the game's own picture of the left weapon in the dual wield (the one in front of your body) and show only the one on your hand" );
 static CVAR_DEFINE_AUTO( vr_dual_debug, "0", 0, "1 = print once a second whether the left weapon of a dual wield was placed at your hand" );
+static CVAR_DEFINE_AUTO( vr_dual_cut, "6", FCVAR_ARCHIVE, "where the arm of the left hand weapon is cut off, in units behind the hand (saved with vr_weapon_save_left)" );
+static CVAR_DEFINE_AUTO( vr_dual_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: pitch degrees (saved with vr_weapon_save_left)" );
+static CVAR_DEFINE_AUTO( vr_dual_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: yaw degrees (saved with vr_weapon_save_left)" );
+static CVAR_DEFINE_AUTO( vr_dual_anim_play, "shoot+fire", FCVAR_ARCHIVE, "parts of the animation names of the left weapon that are allowed to play. Everything else (idle, draw, melee, reload...) holds the first idle pose" );
 static CVAR_DEFINE_AUTO( vr_dual_builtin, "1", FCVAR_ARCHIVE, "1 = the left weapon of a dual wield is drawn by the engine's own studio renderer (it then turns with your hand). 0 = the game's renderer" );
 static CVAR_DEFINE_AUTO( vr_melee_aim, "1", FCVAR_ARCHIVE, "1 = a swing is aimed at where the tip of the weapon is. 0 = the old way, along the direction of the swing" );
+static CVAR_DEFINE_AUTO( vr_melee_radius, "10", FCVAR_ARCHIVE, "how far (game units) from the path of the weapon a creature still counts as hit by the swing" );
+static CVAR_DEFINE_AUTO( vr_melee_predict, "70", FCVAR_ARCHIVE, "how far (game units) along the swing the search for a creature goes" );
 static CVAR_DEFINE_AUTO( vr_melee_lead, "6", FCVAR_ARCHIVE, "how far ahead of the tip (game units, along the swing) a swing is aimed" );
 static CVAR_DEFINE_AUTO( vr_hand_collide, "0", 0, "1 = the weapon in your hand is pushed back by walls instead of going through them" );
 static CVAR_DEFINE_AUTO( vr_hand_reach, "18", FCVAR_ARCHIVE, "how far in front of the hand the weapon counts as touching a wall (units)" );
@@ -327,6 +333,7 @@ static void VR_GLInfo_f( void );
 static void VR_Ents_f( void );
 static void VR_WeaponSave_f( void );
 static void VR_WeaponSaveLeft_f( void );
+static void VR_Slots_f( void );
 static void VR_Center_f( void );
 static void VR_HideCrosshair( void );
 
@@ -441,7 +448,13 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_collide );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_aim );
 	gEngfuncs.Cvar_RegisterVariable( &vr_melee_lead );
+	gEngfuncs.Cvar_RegisterVariable( &vr_melee_radius );
+	gEngfuncs.Cvar_RegisterVariable( &vr_melee_predict );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_builtin );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_cut );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_cut_pitch );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_cut_yaw );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_anim_play );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_own );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_reach );
@@ -534,6 +547,7 @@ void VR_InitCvars( void )
 	VR_UIInitCvars();
 	gEngfuncs.Cmd_AddCommand( "vr_vm_center", VR_Center_f, "put the middle of the weapon in your hand. vr_vm_center <size> also sizes it (size = length in units)" );
 	gEngfuncs.Cmd_AddCommand( "vr_vm_info", VR_VMInfo_f, "print what the game says about the weapon model in hand (scale, size, auto-fit) - for weapons that look wrong" );
+	gEngfuncs.Cmd_AddCommand( "vr_slots", VR_Slots_f, "print what the game says is in the three hotkey slots, and whether the logo file exists" );
 	gEngfuncs.Cmd_AddCommand( "vr_ents", VR_Ents_f, "list the things drawn in this scene (model, render fx, distance, size). \"vr_ents all\" lists everything" );
 	gEngfuncs.Cmd_AddCommand( "vr_gl_info", VR_GLInfo_f, "print which OpenGL driver / opengl32.dll the game is using" );
 	gEngfuncs.Cmd_AddCommand( "vr_weapon_reset", VR_WeaponReset_f, "put the weapon in hand back to the default position/size and overwrite its saved file" );
@@ -837,6 +851,77 @@ static void VR_PublishDual( const ref_viewpass_t *game );
 // How fast a hand moves (relative to the head, from the controller's own velocity: no smoothing, so a swing is seen
 // at once) and where it hits. The trace starts at the tip of the weapon, not at the hand, and goes the way the hand
 // moves: that is what gets hit, and what the game aims at while the swing goes on.
+// The enemy a swing is going for: the tip of the weapon moves along a line (from where it is now, on along the swing),
+// and the first creature whose body that line passes through (with some margin) is the target. The game then gets an aim
+// at the middle of that creature, so its own hit trace cannot miss it the way it did with a plain aim along the swing
+static qboolean VR_FindMeleeTarget( const vec3_t from, const vec3_t to, vec3_t center )
+{
+	float best = 1.0e9f, margin = vr_melee_radius.value;
+	qboolean found = false;
+	int i, n;
+
+	if( !tr.draw_list )
+		return false;
+
+	n = tr.draw_list->num_solid_entities + tr.draw_list->num_trans_entities;
+
+	for( i = 0; i < n; i++ )
+	{
+		cl_entity_t *e = ( i < tr.draw_list->num_solid_entities ) ? tr.draw_list->solid_entities[i] : tr.draw_list->trans_entities[i - tr.draw_list->num_solid_entities];
+		vec3_t bmin, bmax, c, d;
+		float t0 = 0.0f, t1 = 1.0f, dist;
+		int k;
+
+		if( !e || e == tr.viewent || e->player || !e->model || e->model->type != mod_studio )
+			continue;
+
+		// something that walks and has a body (monsters), not props
+		if( e->curstate.solid != SOLID_SLIDEBOX && e->curstate.movetype != MOVETYPE_STEP )
+			continue;
+
+		for( k = 0; k < 3; k++ )
+		{
+			bmin[k] = e->origin[k] + e->curstate.mins[k] - margin;
+			bmax[k] = e->origin[k] + e->curstate.maxs[k] + margin;
+			c[k] = e->origin[k] + ( e->curstate.mins[k] + e->curstate.maxs[k] ) * 0.5f;
+			d[k] = to[k] - from[k];
+		}
+
+		// the line against the box (slab test)
+		for( k = 0; k < 3; k++ )
+		{
+			if( fabs( d[k] ) < 1.0e-5f )
+			{
+				if( from[k] < bmin[k] || from[k] > bmax[k] )
+					break;
+			}
+			else
+			{
+				float a = ( bmin[k] - from[k] ) / d[k], b = ( bmax[k] - from[k] ) / d[k], tmp;
+
+				if( a > b ) { tmp = a; a = b; b = tmp; }
+				if( a > t0 ) t0 = a;
+				if( b < t1 ) t1 = b;
+				if( t0 > t1 ) break;
+			}
+		}
+
+		if( k < 3 )
+			continue;
+
+		dist = VectorDistance( from, c );
+
+		if( dist < best )
+		{
+			best = dist;
+			VectorCopy( c, center );
+			found = true;
+		}
+	}
+
+	return found;
+}
+
 static float VR_SwingHand( int hand, const ref_viewpass_t *game, const vec3_t eye, float d, const char *cv_pitch, const char *cv_yaw, const char *cv_hit )
 {
 	uint32_t dev = VR_InputGetDevice( hand );
@@ -867,10 +952,15 @@ static float VR_SwingHand( int hand, const ref_viewpass_t *game, const vec3_t ey
 
 			if( vr_melee_aim.value )
 			{
-				// the game hits what is in front of the crosshair, from its own eye. A swing moves sideways, so
-				// aiming along the swing (the old way) sent the hit past the enemy. Aim at where the tip IS, a little
-				// ahead of it: the enemy you see the weapon touch is what gets hit
-				VectorMA( tip, vr_melee_lead.value, dir, target );
+				vec3_t a, b;
+
+				// the swing goes on from the tip: look for a creature on that path (a little behind, and ahead)
+				VectorMA( tip, -8.0f, dir, a );
+				VectorMA( tip, vr_melee_predict.value, dir, b );
+
+				if( !VR_FindMeleeTarget( a, b, target ))
+					VectorMA( tip, vr_melee_lead.value, dir, target );
+
 				hit = false;
 			}
 			else
@@ -1427,6 +1517,17 @@ static qboolean VR_ListMatches( const char *list, const char *name, qboolean spl
 }
 
 static qboolean vr_left_pass;	// the universal left hand is being drawn
+static qboolean vr_dual_pass;	// the weapon of the left hand (dual wield) is being drawn
+
+void VR_SetDualPass( qboolean on )
+{
+	vr_dual_pass = on;
+}
+
+qboolean VR_DualAnimPlays( const char *label )
+{
+	return VR_ListMatches( vr_dual_anim_play.string, label, false );
+}
 
 // called by the studio renderer for every mesh of the weapon model while it is drawn at the hand
 int VR_ViewModelMeshMode( int mesh, const char *texname )
@@ -1453,7 +1554,7 @@ void VR_ViewModelClip( qboolean on )
 	GLdouble eq[4];
 	float view[16], cut, cp, cy;
 	vec3_t n, c, t;
-	int hnd = vr_left_pass ? 0 : 1;
+	int hnd = ( vr_left_pass || vr_dual_pass ) ? 0 : 1;
 
 	if( !on || !vr.hand[hnd].valid )
 	{
@@ -1461,9 +1562,9 @@ void VR_ViewModelClip( qboolean on )
 		return;
 	}
 
-	cut = vr_left_pass ? vr_lh_arm_cut.value : vr_vm_arm_cut.value;
-	cp = DEG2RAD( vr_left_pass ? vr_lh_cut_pitch.value : vr_vm_cut_pitch.value );
-	cy = DEG2RAD( vr_left_pass ? vr_lh_cut_yaw.value : vr_vm_cut_yaw.value );
+	cut = vr_dual_pass ? vr_dual_cut.value : ( vr_left_pass ? vr_lh_arm_cut.value : vr_vm_arm_cut.value );
+	cp = DEG2RAD( vr_dual_pass ? vr_dual_cut_pitch.value : ( vr_left_pass ? vr_lh_cut_pitch.value : vr_vm_cut_pitch.value ));
+	cy = DEG2RAD( vr_dual_pass ? vr_dual_cut_yaw.value : ( vr_left_pass ? vr_lh_cut_yaw.value : vr_vm_cut_yaw.value ));
 
 	// the cut plane faces along the hand, tilted by yaw (toward the left) and pitch (toward up)
 	VectorScale( vr.hand[hnd].fwd, cos( cy ), t );
@@ -1876,7 +1977,7 @@ static float VR_WeaponNumber( const char *base, const char *key, float def )
 // vr_weapon_save_left in vr_weaponleft_<weapon>.cfg and loaded again whenever that weapon is in the left hand
 static char vr_dual_model[64];
 
-static const char *vr_dual_keys[] = { "vr_dual_x", "vr_dual_y", "vr_dual_z", "vr_dual_pitch", "vr_dual_yaw", "vr_dual_roll", "vr_dual_scale" };
+static const char *vr_dual_keys[] = { "vr_dual_x", "vr_dual_y", "vr_dual_z", "vr_dual_pitch", "vr_dual_yaw", "vr_dual_roll", "vr_dual_scale", "vr_dual_cut", "vr_dual_cut_pitch", "vr_dual_cut_yaw" };
 
 static void VR_DualFileName( const char *model, char *out, size_t size )
 {
@@ -1894,7 +1995,7 @@ static void VR_DualLoadSettings( const char *model )
 	Q_strncpy( vr_dual_model, model, sizeof( vr_dual_model ));
 
 	for( i = 0; i < ARRAYSIZE( vr_dual_keys ); i++ )
-		gEngfuncs.Cvar_SetValue( vr_dual_keys[i], ( i == 6 ) ? 1.0f : 0.0f );
+		gEngfuncs.Cvar_SetValue( vr_dual_keys[i], ( i == 6 ) ? 1.0f : ( i == 7 ? 6.0f : 0.0f ));
 
 	VR_DualFileName( model, file, sizeof( file ));
 
@@ -1902,6 +2003,29 @@ static void VR_DualLoadSettings( const char *model )
 	{
 		Q_snprintf( cmd, sizeof( cmd ), "exec %s\n", file );
 		gEngfuncs.Cbuf_AddText( cmd );
+	}
+	else
+	{
+		// the built-in left hand positions of the weapons that are held differently on the left (x y z pitch yaw roll scale)
+		static const struct { const char *name; float v[7]; } defaults[] =
+		{
+			{ "v_branch", { -2.0f, -2.0f, 3.0f, 30.0f, 0.0f, -50.0f, 1.0f } },
+			{ "v_switchblade", { -5.0f, -1.0f, 3.5f, 40.0f, -100.0f, -90.0f, 1.0f } },
+		};
+		char base[48];
+
+		VR_ModelBaseName( model, base, sizeof( base ));
+
+		for( i = 0; i < ARRAYSIZE( defaults ); i++ )
+		{
+			int k;
+
+			if( Q_stricmp( base, defaults[i].name ))
+				continue;
+
+			for( k = 0; k < 7; k++ )
+				gEngfuncs.Cvar_SetValue( vr_dual_keys[k], defaults[i].v[k] );
+		}
 	}
 }
 
@@ -2298,6 +2422,24 @@ qboolean VR_EntityHidden( const cl_entity_t *e )
 
 	return false;
 }
+
+static void VR_Slots_f( void )
+{
+	int i;
+
+	for( i = 1; i <= 3; i++ )
+	{
+		char name[64], path[128];
+
+		if( VR_CofSlotName( i, name, sizeof( name )))
+		{
+			Q_snprintf( path, sizeof( path ), "gfx/vgui/weapons/%s/640_%s_slot.tga", name, name );
+			gEngfuncs.Con_Printf( "VR slot %d: '%s' -> %s: %s\n", i, name, path, gEngfuncs.fsapi->FileExists( path, false ) ? "file found" : "FILE NOT FOUND" );
+		}
+		else gEngfuncs.Con_Printf( "VR slot %d: empty (or the game's slot memory could not be read)\n", i );
+	}
+}
+
 
 static void VR_Ents_f( void )
 {
@@ -3587,7 +3729,9 @@ Move the hand over a box and let go of the stick. The box under the hand lights 
 */
 static void VR_DrawQuickSlots( void )
 {
-	static cvar_t *on, *sel, *cx, *cy, *cz, *cyaw;
+	static cvar_t *on;
+	static qboolean was_open;
+	static vec3_t local;	// where the selector is, seen from the head: it goes with you when you walk or turn your head
 	static const float glyph[3][12] =
 	{
 		{ -0.25f, -0.5f, 0.0f, 0.5f, 0.0f, -0.5f, 0, 0, 0, 0, 0, 0 },	// 1: flag, then the stem
@@ -3595,29 +3739,42 @@ static void VR_DrawQuickSlots( void )
 		{ -0.4f, 0.5f, 0.4f, 0.5f, 0.0f, 0.0f, 0.4f, -0.2f, 0.2f, -0.5f, -0.4f, -0.4f }	// 3 (rough)
 	};
 	static const int glyph_n[3] = { 3, 6, 6 };
-	vec3_t start, rightv, upv = { 0, 0, 1 }, to_eye, br, bu;
-	float yaw, proj[16], view[16], len;
-	int i, k, saved_tmu, unit, selected;
+	vec3_t start, rightv, upv = { 0, 0, 1 }, to_eye, br, bu, rel, off;
+	float yaw, proj[16], view[16], len, side, up;
+	int i, k, saved_tmu, unit, selected = 0;
 
 	if( !on ) on = gEngfuncs.pfnGetCvarPointer( "vr_in_qs_on" );
-	if( !on || on->value < 0.5f )
+	if( !on || on->value < 0.5f || !vr.hand[1].valid )
+	{
+		was_open = false;
 		return;
+	}
 
-	sel = sel ? sel : gEngfuncs.pfnGetCvarPointer( "vr_in_qs_sel" );
-	cx = cx ? cx : gEngfuncs.pfnGetCvarPointer( "vr_in_qs_x" );
-	cy = cy ? cy : gEngfuncs.pfnGetCvarPointer( "vr_in_qs_y" );
-	cz = cz ? cz : gEngfuncs.pfnGetCvarPointer( "vr_in_qs_z" );
-	cyaw = cyaw ? cyaw : gEngfuncs.pfnGetCvarPointer( "vr_in_qs_yaw" );
+	// when the stick is pushed forward: remember where the hand is, relative to the head (turned with the head's yaw)
+	if( !was_open )
+	{
+		VectorSubtract( vr.hand[1].pos, vr.head_game, rel );
+		VR_RotateZ( rel, -vr.head_game_yaw, local );
+		was_open = true;
+	}
 
-	if( !sel || !cx || !cy || !cz || !cyaw )
-		return;
-
-	VectorSet( start, cx->value, cy->value, cz->value );
-	yaw = DEG2RAD( cyaw->value );
-	selected = (int)sel->value;
-
-	// the player's right, the same way the engine works out which slot the hand is over
+	// from then on it follows the head: the same place in front of you, however you move or look
+	VR_RotateZ( local, vr.head_game_yaw, off );
+	VectorAdd( vr.head_game, off, start );
+	yaw = DEG2RAD( vr.head_game_yaw );
 	VectorSet( rightv, sin( yaw ), -cos( yaw ), 0.0f );
+
+	// which box the hand is over (the engine reads this when the stick is let go)
+	VectorSubtract( vr.hand[1].pos, start, rel );
+	side = rel[0] * rightv[0] + rel[1] * rightv[1];
+	up = rel[2];
+
+	if( side < -4.0f ) selected = 1;
+	else if( side > 4.0f ) selected = 3;
+	else if( up > 5.5f ) selected = 2;
+
+	gEngfuncs.Cvar_SetValue( "vr_in_qs_pick", (float)selected );
+	(void)to_eye; (void)len;
 
 	// the boxes stand in the plane across the way the hand points: 1, 2, 3 run from the left to the right of the hand
 	VectorCopy( rightv, br );

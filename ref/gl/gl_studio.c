@@ -146,6 +146,7 @@ static int g_nFaceFlags, g_nForceFaceFlags;
 static void R_VRScopeTrack( cl_entity_t *view );
 static qboolean r_cull_flipped;	// culling was switched off by the mirrored-weapon code
 static qboolean r_vr_mirror;		// the weapon is drawn mirrored (a left-handed weapon held in the right hand)
+static qboolean r_dual_hooked;	// the model being drawn is the left weapon of a dual wield
 static qboolean r_dual_on;	// the left weapon of a dual wield is being drawn: it is placed at the left hand
 static char r_dual_name[64];
 static vec3_t r_dual_origin, r_dual_angles;
@@ -2297,7 +2298,7 @@ static void R_StudioDrawPoints( void )
 
 		int vr_mesh_mode = 0;
 
-		if( r_vr_viewmodel && ( RI.currententity == tr.viewent || RI.currententity == &vr_lhand_ent ) )
+		if(( r_vr_viewmodel && ( RI.currententity == tr.viewent || RI.currententity == &vr_lhand_ent )) || r_dual_hooked )
 			vr_mesh_mode = VR_ViewModelMeshMode( j, ptexture[pskinref[pmesh->skinref]].name );
 
 		if( vr_mesh_mode == 1 )
@@ -3372,6 +3373,39 @@ static int R_StudioDrawModel( int flags )
 		VectorCopy( r_dual_origin, RI.currententity->origin );
 		VectorCopy( r_dual_angles, RI.currententity->angles );
 		r_dual_hits++;
+		r_dual_hooked = true;
+		VR_SetDualPass( true );
+
+		// only shooting plays on the left weapon; idle, draw, melee and reload hold the first idle pose
+		{
+			studiohdr_t *dh = (studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, RI.currententity->model );
+			int seq = RI.currententity->curstate.sequence;
+
+			if( dh && dh->numseq > 0 && seq >= 0 && seq < dh->numseq )
+			{
+				mstudioseqdesc_t *cs = (mstudioseqdesc_t *)((byte *)dh + dh->seqindex) + seq;
+
+				if( !VR_DualAnimPlays( cs->label ))
+				{
+					int i, idle = 0;
+
+					for( i = 0; i < dh->numseq; i++ )
+					{
+						mstudioseqdesc_t *sd = (mstudioseqdesc_t *)((byte *)dh + dh->seqindex) + i;
+
+						if( VR_IsIdleLabel( sd->label ))
+						{
+							idle = i;
+							break;
+						}
+					}
+
+					RI.currententity->curstate.sequence = idle;
+					RI.currententity->curstate.frame = 0.0f;
+					g_studio.interpolate = false;
+				}
+			}
+		}
 	}
 
 	R_StudioSetUpTransform( RI.currententity );
@@ -3690,6 +3724,8 @@ void VR_StudioCmds( void )
 void R_StudioSetDualPose( qboolean on, const char *model, const float *origin, const float *vang )
 {
 	r_dual_on = on;
+	r_dual_hooked = on;	// (only the weapon of the left hand is drawn meanwhile: it gets the left arm cut)
+	VR_SetDualPass( on );
 
 	if( !on )
 		return;

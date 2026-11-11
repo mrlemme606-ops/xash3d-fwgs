@@ -258,7 +258,8 @@ void VR_WaterFrameStart( void )
 
 	if( vr_water_debug.value && gp_cl && gp_cl->time >= water.next_print )
 	{
-		gEngfuncs.Con_Printf( "VR water: plane %s at %.1f, %d reflection passes in the last second\n", water.valid ? "known" : "none", water.z, water.passes );
+		gEngfuncs.Con_Printf( "VR water: plane %s at %.1f, %d reflection passes, picture left %s (%dx%d) right %s (%dx%d)\n", water.valid ? "known" : "none", water.z, water.passes,
+			water.tex_ok[0] ? "ok" : "MISSING", water.tex_w[0], water.tex_h[0], water.tex_ok[1] ? "ok" : "MISSING", water.tex_w[1], water.tex_h[1] );
 		water.passes = 0;
 		water.next_print = gp_cl->time + 1.0;
 	}

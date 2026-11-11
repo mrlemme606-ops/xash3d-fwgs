@@ -634,6 +634,42 @@ qboolean VR_CofSlotName( int slot, char *out, size_t size )
 #endif
 }
 
+
+// only shooting plays on the left weapon of a dual wield. Idle, draw, melee, reload hold the first idle pose.
+// (The weapon is a plain cl_entity_t inside client.dll, so its animation can be set right here before it is drawn.)
+static void COF_FreezeDualAnim( cl_entity_t *e )
+{
+	studiohdr_t *hdr;
+	mstudioseqdesc_t *sd;
+	int i, seq = e->curstate.sequence, idle = 0;
+
+	if( !e->model || e->model->type != mod_studio )
+		return;
+
+	hdr = (studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, e->model );
+
+	if( !hdr || seq < 0 || seq >= hdr->numseq )
+		return;
+
+	sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex );
+
+	if( VR_DualAnimPlays( sd[seq].label ))
+		return;
+
+	for( i = 0; i < hdr->numseq; i++ )
+	{
+		if( VR_IsIdleLabel( sd[i].label ))
+		{
+			idle = i;
+			break;
+		}
+	}
+
+	e->curstate.sequence = idle;
+	e->curstate.frame = 0.0f;
+	e->curstate.framerate = 0.0f;
+}
+
 // draw that weapon at the left hand. In this mode the game does NOT use the view origin and angles for it: the weapon is a
 // whole entity inside client.dll, and its position comes from the game's own view calculation, once per frame. So the
 // entity's origin and angles are written here, right before it is drawn, and put back afterwards
@@ -664,6 +700,8 @@ qboolean VR_CofDrawDual( const float *origin, const float *pitch_yaw_roll )
 		memcpy( cof.ent_a, pose, sizeof( pose ));
 		memcpy( cof.ent_b, pose, sizeof( pose ));
 		wrote = true;
+
+		COF_FreezeDualAnim(( cl_entity_t * )((byte *)cof.ent_a - offsetof( cl_entity_t, origin )));
 	}
 
 	gEngfuncs.pfnDrawNormalTriangles();

@@ -45,8 +45,9 @@ CVAR_DEFINE_AUTO( vr_melee_instant, "1", FCVAR_ARCHIVE, "1 = a real swing makes 
 double vr_melee_window_until;	// read by the server (sv_phys.c): until then a melee hit that is waiting is brought forward
 static CVAR_DEFINE_AUTO( vr_swing_sound, "1", FCVAR_ARCHIVE, "1 = a real swing plays the weapon's swing sound at once, and the game's own late swing sound is muted" );
 static CVAR_DEFINE_AUTO( vr_swing_sounds, "swing+miss+slash+whoosh+woosh+whip", FCVAR_ARCHIVE, "name parts of the game's swing sounds (separated by +)" );
-static CVAR_DEFINE_AUTO( vr_melee_hit_sounds, "hitbod+hit_flesh+flesh+_hit", FCVAR_ARCHIVE, "name parts of the sounds of a hit that hurts someone (separated by +). The hand only vibrates when one plays right after a swing. vr_sound_debug 2 lists the sounds after a swing" );
+static CVAR_DEFINE_AUTO( vr_melee_hit_sounds, "hitbody+melee_hit", FCVAR_ARCHIVE, "name parts of the sounds of a hit that hurts someone (separated by +). The hand only vibrates when one plays right after a swing. vr_sound_debug 2 lists the sounds after a swing" );
 static CVAR_DEFINE_AUTO( vr_melee_hold, "0.12", FCVAR_ARCHIVE, "seconds the attack button is held for a real swing" );
+static CVAR_DEFINE_AUTO( vr_in_qs_pick, "0", 0, "(internal) the quick slot the renderer says the hand is over" );
 static CVAR_DEFINE_AUTO( vr_in_qs_on, "0", 0, "(internal) the quick slot selector is open" );
 static CVAR_DEFINE_AUTO( vr_in_qs_sel, "0", 0, "(internal) the quick slot the hand is over (0 = none)" );
 static CVAR_DEFINE_AUTO( vr_in_qs_x, "0", 0, "(internal) where the selector opened, x" );
@@ -561,6 +562,7 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_swing_sounds );
 	Cvar_RegisterVariable( &vr_melee_hit_sounds );
 	Cvar_RegisterVariable( &vr_melee_hold );
+	Cvar_RegisterVariable( &vr_in_qs_pick );
 	Cvar_RegisterVariable( &vr_in_qs_on );
 	Cvar_RegisterVariable( &vr_in_qs_sel );
 	Cvar_RegisterVariable( &vr_in_qs_x );
@@ -1322,6 +1324,10 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			else if( up > 5.5f ) vr_qs_sel = 2;
 		}
 	}
+
+	// the renderer draws the three slots in the world (attached to the head) and says which one the hand is over
+	if( vr_qs_active )
+		vr_qs_sel = Cvar_VariableInteger( "vr_in_qs_pick" );
 
 	// the renderer draws the three slots in the world, above the hand, where the stick was pushed forward
 	Cvar_DirectSetValue( &vr_in_qs_on, vr_qs_active ? 1.0f : 0.0f );

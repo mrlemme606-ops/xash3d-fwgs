@@ -240,35 +240,50 @@ extern convar_t vr_melee_instant;
 =============
 SV_VRMeleeInstant
 
-Cry of Fear's melee weapons set a think on the weapon, 0.28 to 0.41 seconds after the attack, and the hit happens in
-it. In VR the hit should land when you swing, not when the game's animation would have. So right after a real swing,
-that waiting think of the player's own weapon is made to run in the next frame.
+Cry of Fear's melee weapons do two things that make a VR swing feel wrong:
+- the hit happens in a think of the PLAYER, 0.28 to 0.41 seconds after the attack button
+- after the attack the weapon waits (m_flNextPrimaryAttack, 0.9 s for the nightstick) before it can attack again
+In VR the hit belongs to the swing, so right after a real swing the waiting hit runs in the next frame, and the weapons
+of the player may attack again almost at once.
 =============
 */
-static void SV_VRMeleeInstant( edict_t *ent )
+static void SV_VRMeleeInstant( edict_t *player )
 {
+	int i;
+
 	if( host.realtime >= vr_melee_window_until || !vr_melee_instant.value )
 		return;
 
-	if( !ent->v.owner || NUM_FOR_EDICT( ent->v.owner ) != 1 )
+	if( NUM_FOR_EDICT( player ) != 1 )
 		return;
 
-	if( ent->v.nextthink <= sv.time + sv.frametime || ent->v.nextthink > sv.time + 0.6f )
-		return;
+	// the hit
+	if( player->v.nextthink > sv.time + sv.frametime && player->v.nextthink < sv.time + 0.6f )
+		player->v.nextthink = sv.time + 0.001f;
 
-	if( Q_strnicmp( SV_GetString( ent->v.classname ), "weapon_", 7 ))
-		return;
+	// the wait between two attacks of the weapons the player holds
+	for( i = 2; i < svgame.numEntities; i++ )
+	{
+		edict_t *e = EDICT_NUM( i );
+		float *next;
 
-	ent->v.nextthink = sv.time + 0.001f;
+		if( !SV_IsValidEdict( e ) || e->v.owner != player || !e->pvPrivateData )
+			continue;
+
+		if( Q_strnicmp( SV_GetString( e->v.classname ), "weapon_", 7 ))
+			continue;
+
+		// CBasePlayerWeapon::m_flNextPrimaryAttack (float number 115 of the object in the 32-bit game library)
+		next = (float *)((byte *)e->pvPrivateData + 460 );
+
+		if( *next > sv.time + 0.05f && *next < sv.time + 3.0f )
+			*next = sv.time + 0.05f;
+	}
 }
 #endif
 
 static qboolean SV_RunThink( edict_t *ent )
 {
-#if !XASH_DEDICATED
-	SV_VRMeleeInstant( ent );
-#endif
-
 	if( !FBitSet( ent->v.flags, FL_KILLME ))
 	{
 		if( !SV_TryThink( ent, sv.frametime, sv.time ))
@@ -293,6 +308,10 @@ Returns false if the entity removed itself.
 */
 qboolean SV_PlayerRunThink( edict_t *ent, float frametime, double time )
 {
+#if !XASH_DEDICATED
+	SV_VRMeleeInstant( ent );
+#endif
+
 	if( svgame.physFuncs.SV_PlayerThink )
 		return svgame.physFuncs.SV_PlayerThink( ent, frametime, time );
 

@@ -124,6 +124,8 @@ typedef struct
 void VR_ReloadInitCvars( void );
 qboolean VR_LeftGripping( void );
 void R_StudioForceBuiltin( qboolean on );
+void VR_SetDualPass( qboolean on );
+qboolean VR_DualAnimPlays( const char *label );
 void R_StudioSetDualPose( qboolean on, const char *model, const float *origin, const float *vang );
 int R_StudioDualHits( void );
 void VR_ReloadTick( void );
