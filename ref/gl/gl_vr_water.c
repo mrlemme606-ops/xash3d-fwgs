@@ -18,7 +18,7 @@ If anything fails (no GLSL, shader error) the game's own water effect is left sw
 #include "gl_vr.h"
 #include "xash3d_mathlib.h"
 
-static CVAR_DEFINE_AUTO( vr_water, "1", FCVAR_ARCHIVE, "1 = real water reflections in VR (needs vr_sym_proj 1). 0 = the game's own water effect" );
+static CVAR_DEFINE_AUTO( vr_water, "0", FCVAR_ARCHIVE, "0 = the game's own water effect, kept steady when you tilt your head (see vr_cof_watercomp). 1 = experimental real mirrored reflection made by the engine (needs vr_sym_proj 1)" );
 static CVAR_DEFINE_AUTO( vr_water_strength, "0.75", FCVAR_ARCHIVE, "how much of the water is the reflection (0..1)" );
 static CVAR_DEFINE_AUTO( vr_water_ripple, "0.02", FCVAR_ARCHIVE, "how much the ripples distort the reflection" );
 static CVAR_DEFINE_AUTO( vr_water_res, "0.5", FCVAR_ARCHIVE, "size of the reflection picture compared to the eye (0.25..1). Smaller is faster" );
@@ -227,7 +227,7 @@ void VR_WaterFrameStart( void )
 {
 	int i, best = -1;
 
-	if( !water.prog_tried )
+	if( Water_Wanted() && !water.prog_tried )
 		Water_BuildProgram();
 
 	if( !Water_Wanted() || !water.prog_ok )

@@ -42,6 +42,8 @@ static CVAR_DEFINE_AUTO( vr_cof_eyeangles, "1", FCVAR_ARCHIVE, "1 = give the cli
 static CVAR_DEFINE_AUTO( vr_cof_eyeorigin, "1", FCVAR_ARCHIVE, "1 = centre the client.dll sky on the eye being drawn instead of the game's view origin" );
 static CVAR_DEFINE_AUTO( vr_cof_depth, "0.8", 0, "far end of the depth range the world is drawn in while the game's client.dll is attached (it keeps 0.8 to 1.0 for its sky). 1 = off" );
 static CVAR_DEFINE_AUTO( vr_cof_watersize, "1", FCVAR_ARCHIVE, "1 = tell the game's water effect the size of the eye picture (it copies the screen from the bottom left corner at the window size). Experimental" );
+static CVAR_DEFINE_AUTO( vr_cof_watercomp, "1", FCVAR_ARCHIVE, "the game's own water reflection is a copy of the picture shifted 'up' on the screen. 1 = shift towards the real up of the world (stable when you tilt your head), -1 = the other way round, 0 = shift along the screen like the flat game" );
+static CVAR_DEFINE_AUTO( vr_cof_waterscale, "1", FCVAR_ARCHIVE, "how far the game's water reflection is shifted (1 = like the flat game)" );
 static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepass while the client.dll re-arm is working (normally not needed)" );
 
 #if defined( _WIN32 )
@@ -72,6 +74,9 @@ static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepas
 #define COF_ENT_B		0x10550608u	// the same in its curstate (origin[3], angles[3])
 #define COF_VORIGIN		0x10559638u	// 3 floats: view origin the secondary view models are drawn at
 #define COF_FN_SECONDARY	0x1008C7E0u
+#define COF_FN_WATER		0x10086D10u	// the water pass: scene copy, noise on the water quads, shader pass over the screen
+#define COF_WATER_OFFSET	0x101511C0u	// float[4] TexOffset of water_fp.cg: shift = xy * noise.r + zw * noise.g, stock value 0 0.05 0 0.05
+#define COF_WATER_OBJ		0x10545078u	// the water object: float +12 and +16 are the size of its textures (powers of two)
 #define COF_SCREENSZ		0x1018F430u	// int width, height the water effect copies from the screen
 
 static struct
@@ -87,6 +92,11 @@ static struct
 	mplane_t	*frustum;
 	float		*dlights;	// 32 * 31 floats
 	int		*scrsize;
+	float		*waterofs;
+	const float	*waterobj;
+	float		water_orig[4];
+	qboolean	water_ok, water_patched;
+	float		water_dir[2];
 	volatile int	*secondary;
 	char		*dualname;
 	int		*dualmode;
@@ -288,6 +298,27 @@ static void COF_Resolve( void )
 	cof.scrsize = (int *)( base + COF_RVA( COF_SCREENSZ ));
 	cof.scr_ok = COF_Readable( cof.scrsize, 8, true );
 
+	// the water shift constant. It sits in read only data, so it is only touched after its code and its value were checked
+	{
+		static const unsigned water_vars[] = { COF_WATER_OFFSET };
+		static const uint32_t water_stock[4] = { 0x00000000u, 0x3D4CCCCDu, 0x00000000u, 0x3D4CCCCDu };
+
+		cof.waterofs = (float *)( base + COF_RVA( COF_WATER_OFFSET ));
+		cof.waterobj = (const float *)( base + COF_RVA( COF_WATER_OBJ ));
+		cof.water_ok = false;
+
+		if( COF_CodeRefs( base, COF_FN_WATER, 0x800, water_vars, 1 ) && COF_Readable( cof.waterofs, 16, false ) && !memcmp( cof.waterofs, water_stock, 16 ))
+		{
+			DWORD old = 0;
+
+			if( VirtualProtect( cof.waterofs, 16, PAGE_EXECUTE_READWRITE, &old ))
+			{
+				memcpy( cof.water_orig, cof.waterofs, sizeof( cof.water_orig ));
+				cof.water_ok = true;
+			}
+		}
+	}
+
 	cof.ok = true;
 	Q_strncpy( cof.why, "ok", sizeof( cof.why ));
 	gEngfuncs.Con_Printf( "VR: client.dll renderer found at %p, per-eye re-arm is available (vr_cof_status)\n", (void *)base );
@@ -438,6 +469,77 @@ void VR_CofBeginFrame( void )
 	cof.frames++;
 }
 
+// The game's water is not a mirror. It copies the finished picture, paints the ripple texture (noise.tga) on the water
+// quads, and then draws every water pixel again with the colour it finds a little way "up" the screen:
+//   shift = TexOffset.xy * noise.r + TexOffset.zw * noise.g     (stock TexOffset = 0 0.05 0 0.05, so straight up the screen)
+// That is fine for a camera that never rolls. A tilted head makes "up the screen" point sideways in the world, so the
+// reflection swims. Here the same shift (same length, same ripples) is pointed at the real up of the world instead.
+static void COF_WaterShift( const float *eyeangles )
+{
+	vec3_t f, r, u, tmp;
+	float sx, sy, len, texw, texh, k;
+
+	if( !cof.water_ok )
+		return;
+
+	if( !eyeangles || vr_cof_watercomp.value == 0.0f )
+	{
+		if( cof.water_patched )	// back to the stock value
+		{
+			memcpy( cof.waterofs, cof.water_orig, sizeof( cof.water_orig ));
+			cof.water_patched = false;
+		}
+		return;
+	}
+
+	AngleVectors( eyeangles, f, r, u );
+	sx = r[2];	// where the world's up (0 0 1) lands on the screen: along the screen's right ...
+	sy = u[2];	// ... and along the screen's up
+	len = sqrt( sx * sx + sy * sy );
+
+	if( len < 0.25f )	// looking nearly straight up or down: only the roll tells where up is
+	{
+		VectorSet( tmp, 0.0f, eyeangles[YAW], eyeangles[ROLL] );
+		AngleVectors( tmp, f, r, u );
+		sx = r[2];
+		sy = u[2];
+		len = sqrt( sx * sx + sy * sy );
+	}
+
+	if( len < 0.01f )
+	{
+		sx = 0.0f;
+		sy = 1.0f;
+	}
+	else
+	{
+		sx /= len;
+		sy /= len;
+	}
+
+	if( vr_cof_watercomp.value < 0.0f )
+		sx = -sx;
+
+	// the shift is measured in the water textures' own units, which are a power of two bigger than the picture
+	texw = cof.waterobj[3];
+	texh = cof.waterobj[4];
+
+	if( !( texw >= 16.0f && texw <= 16384.0f && texh >= 16.0f && texh <= 16384.0f ))
+		texw = texh = 1.0f;
+
+	k = 0.05f * bound( 0.0f, vr_cof_waterscale.value, 4.0f );
+
+	// the same length in pixels in both directions
+	cof.water_dir[0] = k * sx * texh / texw;
+	cof.water_dir[1] = k * sy;
+
+	cof.waterofs[0] = cof.water_dir[0];
+	cof.waterofs[1] = cof.water_dir[1];
+	cof.waterofs[2] = cof.water_dir[0];
+	cof.waterofs[3] = cof.water_dir[1];
+	cof.water_patched = true;
+}
+
 // before every R_RenderScene of a VR frame, after the engine built RI.frustum
 void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin, const float *eyeangles )
 {
@@ -468,6 +570,7 @@ void VR_CofBeforePass( const void *frustum_planes, const float *eyeorigin, const
 		memcpy( cof.frustum, planes, sizeof( mplane_t ) * 4 );	// left, right, bottom, top: the engine and the DLL both use inward normals
 
 	COF_Relight();
+	COF_WaterShift( eyeangles );
 
 	// the water effect copies the screen from the bottom left corner, at this size
 	if( cof.scr_ok && vr_cof_watersize.value != 0.0f && cof.s_scr[0] > 0 && cof.s_scr[1] > 0 )
@@ -502,6 +605,12 @@ void VR_CofEndFrame( void )
 		memcpy( cof.vangles, cof.s_va, sizeof( cof.s_va ));
 	}
 
+	if( cof.water_patched )
+	{
+		memcpy( cof.waterofs, cof.water_orig, sizeof( cof.water_orig ));
+		cof.water_patched = false;
+	}
+
 	if( cof.in_frame && cof.scr_ok && cof.s_scr[0] > 0 )
 	{
 		cof.scrsize[0] = cof.s_scr[0];
@@ -526,6 +635,7 @@ static void VR_CofStatus_f( void )
 	}
 
 	gEngfuncs.Con_Printf( "  dual weapon hook: %s\n", cof.dual_ok ? "found" : "NOT found" );
+	gEngfuncs.Con_Printf( "  water shift hook: %s, last direction on screen %.3f %.3f\n", cof.water_ok ? "found" : "NOT found (different client.dll build)", cof.water_dir[0], cof.water_dir[1] );
 	gEngfuncs.Con_Printf( "  base %p, re-arm %s, frustum %s, eye origin %s\n", (void *)cof.base,
 		vr_cof_rearm.value ? "on" : "off", vr_cof_frustum.value ? "on" : "off", vr_cof_eyeorigin.value ? "on" : "off" );
 	gEngfuncs.Con_Printf( "  frames armed %d, passes re-armed %d, frames skipped (nothing armed) %d\n", cof.frames, cof.passes, cof.skipped );
@@ -732,6 +842,8 @@ void VR_CofInitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_eyeangles );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_prepass );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_watersize );
+	gEngfuncs.Cvar_RegisterVariable( &vr_cof_watercomp );
+	gEngfuncs.Cvar_RegisterVariable( &vr_cof_waterscale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_depth );
 	gEngfuncs.Cmd_AddCommand( "vr_light_dump", VR_CofLightDump_f, "list the game's active lights (to tune phone / flashlight / flare / lantern lights)" );
 	gEngfuncs.Cmd_AddCommand( "vr_cof_status", VR_CofStatus_f, "show whether the game's client.dll renderer is being kept in step with the VR eyes" );

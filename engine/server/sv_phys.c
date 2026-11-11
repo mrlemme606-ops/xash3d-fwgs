@@ -264,7 +264,7 @@ static void SV_VRMeleeInstant( edict_t *player )
 	// the wait between two attacks of the weapons the player holds
 	for( i = 2; i < svgame.numEntities; i++ )
 	{
-		edict_t *e = EDICT_NUM( i );
+		edict_t *e = &svgame.edicts[i];
 		float *next;
 
 		if( !SV_IsValidEdict( e ) || e->v.owner != player || !e->pvPrivateData )
