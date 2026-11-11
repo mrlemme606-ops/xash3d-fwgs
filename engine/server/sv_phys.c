@@ -249,6 +249,7 @@ of the player may attack again almost at once.
 */
 static void SV_VRMeleeInstant( edict_t *player )
 {
+	static double wait_cut_for;
 	int i;
 
 	if( host.realtime >= vr_melee_window_until || !vr_melee_instant.value )
@@ -261,7 +262,13 @@ static void SV_VRMeleeInstant( edict_t *player )
 	if( player->v.nextthink > sv.time + sv.frametime && player->v.nextthink < sv.time + 0.6f )
 		player->v.nextthink = sv.time + 0.001f;
 
-	// the wait between two attacks of the weapons the player holds
+	// the wait between two attacks of the weapons the player holds: cut ONCE per swing. The attack button stays pressed for a
+	// moment after a swing, so cutting the wait on every frame made the weapon attack twice (two hits for one swing)
+	if( wait_cut_for == vr_melee_window_until )
+		return;
+
+	wait_cut_for = vr_melee_window_until;
+
 	for( i = 2; i < svgame.numEntities; i++ )
 	{
 		edict_t *e = &svgame.edicts[i];
@@ -276,8 +283,8 @@ static void SV_VRMeleeInstant( edict_t *player )
 		// CBasePlayerWeapon::m_flNextPrimaryAttack (float number 115 of the object in the 32-bit game library)
 		next = (float *)((byte *)e->pvPrivateData + 460 );
 
-		if( *next > sv.time + 0.05f && *next < sv.time + 3.0f )
-			*next = sv.time + 0.05f;
+		if( *next > sv.time && *next < sv.time + 3.0f )
+			*next = sv.time;
 	}
 }
 #endif

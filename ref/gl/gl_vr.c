@@ -230,7 +230,9 @@ static CVAR_DEFINE_AUTO( vr_dual_debug, "0", 0, "1 = print once a second whether
 static CVAR_DEFINE_AUTO( vr_dual_cut, "6", FCVAR_ARCHIVE, "where the arm of the left hand weapon is cut off, in units behind the hand (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: pitch degrees (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: yaw degrees (saved with vr_weapon_save_left)" );
-static CVAR_DEFINE_AUTO( vr_dual_anim_play, "shoot+fire", FCVAR_ARCHIVE, "parts of the animation names of the left weapon that are allowed to play. Everything else (idle, draw, melee, reload...) holds the first idle pose" );
+static CVAR_DEFINE_AUTO( vr_dual_nomirror, "branch+switchblade", FCVAR_ARCHIVE, "weapons (part of the model name, separated by +) that are held on the left hand exactly as on the right, not reflected. The branch and the switchblade are held differently in the game's dual wield" );
+static CVAR_DEFINE_AUTO( vr_dual_clip_tex, "", FCVAR_ARCHIVE, "extra texture name fragments of the left weapon's arm that are cut off behind the wrist (separate with +). vr_vm_dump_tex 1 lists the textures" );
+static CVAR_DEFINE_AUTO( vr_dual_anim_play, "shoot+fire+shot", FCVAR_ARCHIVE, "parts of the animation names of the left weapon that are allowed to play. Everything else (idle, draw, melee, reload...) holds the first idle pose" );
 static CVAR_DEFINE_AUTO( vr_dual_builtin, "1", FCVAR_ARCHIVE, "1 = the left weapon of a dual wield is drawn by the engine's own studio renderer (it then turns with your hand). 0 = the game's renderer" );
 static CVAR_DEFINE_AUTO( vr_melee_aim, "1", FCVAR_ARCHIVE, "1 = a swing is aimed at where the tip of the weapon is. 0 = the old way, along the direction of the swing" );
 static CVAR_DEFINE_AUTO( vr_melee_radius, "10", FCVAR_ARCHIVE, "how far (game units) from the path of the weapon a creature still counts as hit by the swing" );
@@ -455,6 +457,8 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_cut_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_cut_yaw );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_anim_play );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_nomirror );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_clip_tex );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_own );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_reach );
@@ -1518,6 +1522,7 @@ static qboolean VR_ListMatches( const char *list, const char *name, qboolean spl
 
 static qboolean vr_left_pass;	// the universal left hand is being drawn
 static qboolean vr_dual_pass;	// the weapon of the left hand (dual wield) is being drawn
+static char vr_dual_model[64];
 
 void VR_SetDualPass( qboolean on )
 {
@@ -1534,8 +1539,8 @@ int VR_ViewModelMeshMode( int mesh, const char *texname )
 {
 	if( vr_vm_dump_tex.value )
 	{
-		gEngfuncs.Con_Printf( "VR weapon '%s' mesh %d: texture '%s'\n",
-			( tr.viewent && tr.viewent->model ) ? tr.viewent->model->name : "?", mesh, texname );
+		gEngfuncs.Con_Printf( "VR %s weapon '%s' mesh %d: texture '%s'\n", vr_dual_pass ? "LEFT (dual)" : "right hand",
+			vr_dual_pass ? vr_dual_model : (( tr.viewent && tr.viewent->model ) ? tr.viewent->model->name : "?" ), mesh, texname );
 		vr_dump_done = true;
 	}
 
@@ -1543,6 +1548,9 @@ int VR_ViewModelMeshMode( int mesh, const char *texname )
 		return 1;
 
 	if( VR_ListMatches( vr_vm_clip_tex.string, texname, true ))
+		return 2;
+
+	if( vr_dual_pass && vr_dual_clip_tex.string[0] && VR_ListMatches( vr_dual_clip_tex.string, texname, true ))
 		return 2;
 
 	return 0;
@@ -1605,6 +1613,15 @@ void VR_SetHandPass( qboolean left )
 
 qboolean VR_ViewModelBoneHidden( const char *bonename )
 {
+	// the weapon of the left hand in a dual wield: the same parts are hidden as on the right hand (the other arm, the sleeve)
+	if( vr_dual_pass )
+	{
+		if( !Q_stricmp( bonename, "lolshel" ))
+			return true;
+
+		return VR_ListMatches( vr_vm_hide_bones.string, bonename, false );
+	}
+
 	qboolean hidden = VR_ListMatches( vr_left_pass ? vr_lhand_hide_bones.string : vr_vm_hide_bones.string, bonename, false );
 
 	// a loose shell part of the shotgun model
@@ -1908,7 +1925,7 @@ static const char *vr_builtin_profiles[][2] =
 {
 	{ "v_actions", "vr_vm_grip_x -12\nvr_vm_grip_y -20\nvr_vm_grip_z -11\nvr_vm_pitch -70\nvr_vm_yaw 80\nvr_vm_roll -10\nvr_vm_flip_roll 0\nvr_vm_scale 0.19\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_branch", "vr_vm_grip_x 13\nvr_vm_grip_y -6.5\nvr_vm_grip_z -8\nvr_vm_pitch 7\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 0.18\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0\nvr_scope_y 0\nvr_scope_z 3\nvr_scope_radius 1.2\nvr_scope_fov 10\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
-	{ "v_camera", "vr_vm_grip_x 10\nvr_vm_grip_y -5\nvr_vm_grip_z -3\nvr_vm_pitch 60\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_aim_pitch 70\nvr_vm_scale 0.02\nvr_hand_pitch 60\nvr_vm_arm_cut 20\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_rl_grip_radius 10\nvr_rl_grip_x 12\nvr_rl_grip_y 0\nvr_rl_grip_z -4\n" },
+	{ "v_camera", "vr_vm_grip_x 10\nvr_vm_grip_y -5\nvr_vm_grip_z -3\nvr_vm_pitch 60\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_aim_pitch 70\nvr_vm_scale 0.02\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_rl_grip_radius 10\nvr_rl_grip_x 12\nvr_rl_grip_y 0\nvr_rl_grip_z -4\n" },
 	{ "v_flare", "vr_vm_grip_x 12\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 0\nvr_vm_yaw 10\nvr_vm_roll 60\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_muzzle_x -4\nvr_muzzle_y 2\nvr_muzzle_z -12\n" },
 	{ "v_flashlight", "vr_vm_grip_x 8\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 100\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 1.2\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 100\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_g43", "vr_vm_grip_x 4\nvr_vm_grip_y -1.5\nvr_vm_grip_z -2\nvr_vm_pitch 0\nvr_vm_yaw 2.3\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.45\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_rl_grip_radius 8\nvr_rl_grip_x 16\nvr_rl_grip_y 0\nvr_rl_grip_z 0\n" },
@@ -1975,7 +1992,6 @@ static float VR_WeaponNumber( const char *base, const char *key, float def )
 
 // the left hand weapon of a dual wield has its own settings per weapon (vr_dual_x ... vr_dual_scale), saved with
 // vr_weapon_save_left in vr_weaponleft_<weapon>.cfg and loaded again whenever that weapon is in the left hand
-static char vr_dual_model[64];
 
 static const char *vr_dual_keys[] = { "vr_dual_x", "vr_dual_y", "vr_dual_z", "vr_dual_pitch", "vr_dual_yaw", "vr_dual_roll", "vr_dual_scale", "vr_dual_cut", "vr_dual_cut_pitch", "vr_dual_cut_yaw" };
 
@@ -2073,10 +2089,14 @@ static qboolean VR_GetDualPose( const char *model, vec3_t origin, float *vang, f
 	wr = VR_WeaponNumber( base, "vr_vm_roll", 0.0f ) + vr_dual_roll.value;
 	*scale = VR_WeaponNumber( base, "vr_vm_scale", 0.5f ) * vr_dual_scale.value;
 
-	// the other hand: the same hold, reflected across the body's middle plane
-	gy = -gy;
-	wy = -wy;
-	wr = -wr;
+	// the other hand: the same hold, reflected across the body's middle plane. (The branch and the switchblade are held
+	// differently on the left in the game; their left hand settings are made for the hold as it is, not reflected)
+	if( !VR_ListMatches( vr_dual_nomirror.string, base, true ))
+	{
+		gy = -gy;
+		wy = -wy;
+		wr = -wr;
+	}
 
 	VectorCopy( vr.hand[0].fwd, bf );
 	VectorCopy( vr.hand[0].left, bl );
@@ -2423,6 +2443,58 @@ qboolean VR_EntityHidden( const cl_entity_t *e )
 	return false;
 }
 
+// what the game keeps for a hotkey slot is a file name like "inventoryitems/weapons/weapon_p345.txt":
+// the weapon's name is what is left without the folders, the "weapon_" and the ".txt"
+static void VR_SlotWeaponName( const char *raw, char *out, size_t size )
+{
+	const char *p = raw, *q;
+	char *dot;
+
+	for( q = raw; *q; q++ )
+		if( *q == '/' || *q == '\\' ) p = q + 1;
+
+	Q_strncpy( out, p, size );
+
+	if( !Q_strnicmp( out, "weapon_", 7 ))
+		memmove( out, out + 7, Q_strlen( out + 7 ) + 1 );
+
+	dot = Q_strrchr( out, '.' );
+
+	if( dot ) *dot = 0;
+}
+
+// gfx/vgui/weapons/<name>/640_<name>_slot.tga (the tactical glock keeps the normal glock's picture)
+static qboolean VR_SlotLogoPath( const char *raw, char *path, size_t size )
+{
+	char name[64], alt[64];
+	int n;
+
+	VR_SlotWeaponName( raw, name, sizeof( name ));
+
+	if( !name[0] )
+		return false;
+
+	Q_snprintf( path, size, "gfx/vgui/weapons/%s/640_%s_slot.tga", name, name );
+
+	if( gEngfuncs.fsapi->FileExists( path, false ))
+		return true;
+
+	Q_strncpy( alt, name, sizeof( alt ));
+	n = Q_strlen( alt );
+
+	if( n > 3 && !Q_stricmp( alt + n - 3, "tac" ))
+	{
+		alt[n - 3] = 0;
+		Q_snprintf( path, size, "gfx/vgui/weapons/%s/640_%s_slot.tga", name, alt );
+
+		if( gEngfuncs.fsapi->FileExists( path, false ))
+			return true;
+	}
+
+	Q_snprintf( path, size, "gfx/vgui/weapons/%s/640_%s_slot.tga", name, name );
+	return false;
+}
+
 static void VR_Slots_f( void )
 {
 	int i;
@@ -2433,8 +2505,9 @@ static void VR_Slots_f( void )
 
 		if( VR_CofSlotName( i, name, sizeof( name )))
 		{
-			Q_snprintf( path, sizeof( path ), "gfx/vgui/weapons/%s/640_%s_slot.tga", name, name );
-			gEngfuncs.Con_Printf( "VR slot %d: '%s' -> %s: %s\n", i, name, path, gEngfuncs.fsapi->FileExists( path, false ) ? "file found" : "FILE NOT FOUND" );
+			qboolean found = VR_SlotLogoPath( name, path, sizeof( path ));
+
+			gEngfuncs.Con_Printf( "VR slot %d: '%s' -> %s: %s\n", i, name, path, found ? "file found" : "FILE NOT FOUND" );
 		}
 		else gEngfuncs.Con_Printf( "VR slot %d: empty (or the game's slot memory could not be read)\n", i );
 	}
@@ -3750,19 +3823,28 @@ static void VR_DrawQuickSlots( void )
 		return;
 	}
 
-	// when the stick is pushed forward: remember where the hand is, relative to the head (turned with the head's yaw)
+	// when the stick is pushed forward: remember where the hand is. The boxes stay there, over the place of the hand,
+	// and turn to face you whichever way you look or walk (they do not go round with your head)
 	if( !was_open )
 	{
-		VectorSubtract( vr.hand[1].pos, vr.head_game, rel );
-		VR_RotateZ( rel, -vr.head_game_yaw, local );
+		VectorCopy( vr.hand[1].pos, local );
 		was_open = true;
 	}
 
-	// from then on it follows the head: the same place in front of you, however you move or look
-	VR_RotateZ( local, vr.head_game_yaw, off );
-	VectorAdd( vr.head_game, off, start );
-	yaw = DEG2RAD( vr.head_game_yaw );
-	VectorSet( rightv, sin( yaw ), -cos( yaw ), 0.0f );
+	VectorCopy( local, start );
+
+	// the boxes face the head: their right is across the line from the hand to the eyes
+	VectorSubtract( vr.head_game, start, to_eye );
+	to_eye[2] = 0.0f;
+	len = sqrt( to_eye[0] * to_eye[0] + to_eye[1] * to_eye[1] );
+
+	if( len > 1.0f )
+		VectorSet( rightv, -to_eye[1] / len, to_eye[0] / len, 0.0f );
+	else
+	{
+		yaw = DEG2RAD( vr.head_game_yaw );
+		VectorSet( rightv, sin( yaw ), -cos( yaw ), 0.0f );
+	}
 
 	// which box the hand is over (the engine reads this when the stick is let go)
 	VectorSubtract( vr.hand[1].pos, start, rel );
@@ -3774,12 +3856,10 @@ static void VR_DrawQuickSlots( void )
 	else if( up > 5.5f ) selected = 2;
 
 	gEngfuncs.Cvar_SetValue( "vr_in_qs_pick", (float)selected );
-	(void)to_eye; (void)len;
 
-	// the boxes stand in the plane across the way the hand points: 1, 2, 3 run from the left to the right of the hand
+	// the boxes stand upright across the way you look at them: 1, 2, 3 run from the left to the right
 	VectorCopy( rightv, br );
 	VectorCopy( upv, bu );
-	(void)to_eye; (void)len;
 
 	Matrix4x4_ToArrayFloatGL( RI.projectionMatrix, proj );
 	Matrix4x4_ToArrayFloatGL( RI.worldviewMatrix, view );
@@ -3836,8 +3916,7 @@ static void VR_DrawQuickSlots( void )
 			if( Q_stricmp( loaded[i], name ))
 			{
 				Q_strncpy( loaded[i], name, sizeof( loaded[i] ));
-				Q_snprintf( path, sizeof( path ), "gfx/vgui/weapons/%s/640_%s_slot.tga", name, name );
-				tex[i] = GL_LoadTexture( path, NULL, 0, TF_NOMIPMAP | TF_CLAMP );
+				tex[i] = VR_SlotLogoPath( name, path, sizeof( path )) ? GL_LoadTexture( path, NULL, 0, TF_NOMIPMAP | TF_CLAMP ) : 0;
 			}
 
 			has_tex = tex[i] > 0;
@@ -3880,20 +3959,6 @@ static void VR_DrawQuickSlots( void )
 			pglVertex3f( p[k][0], p[k][1], p[k][2] );
 		pglEnd();
 
-		// nothing in the slot: its number
-		if( !has_tex )
-		{
-			pglBegin( GL_LINE_STRIP );
-			for( k = 0; k < glyph_n[i]; k++ )
-			{
-				vec3_t g;
-
-				VectorMA( c, glyph[i][k * 2] * hh * 1.1f, br, g );
-				VectorMA( g, glyph[i][k * 2 + 1] * hh * 1.1f, bu, g );
-				pglVertex3f( g[0], g[1], g[2] );
-			}
-			pglEnd();
-		}
 	}
 
 	pglMatrixMode( GL_MODELVIEW );

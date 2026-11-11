@@ -2144,7 +2144,7 @@ static void R_StudioDrawPoints( void )
 
 	g_studio.vr_filter = false;
 
-	if( r_vr_viewmodel && ( RI.currententity == tr.viewent || RI.currententity == &vr_lhand_ent ) )
+	if(( r_vr_viewmodel && ( RI.currententity == tr.viewent || RI.currententity == &vr_lhand_ent )) || ( r_dual_hooked && RI.currententity != tr.viewent && RI.currententity->model && !Q_stricmp( RI.currententity->model->name, r_dual_name )))
 	{
 		byte bonehide[MAXSTUDIOBONES];
 		mstudiobone_t *vrbones = (mstudiobone_t *)((byte *)m_pStudioHeader + m_pStudioHeader->boneindex);
