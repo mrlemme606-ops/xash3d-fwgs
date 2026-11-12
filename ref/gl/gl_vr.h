@@ -128,6 +128,7 @@ void VR_SetDualPass( qboolean on );
 qboolean VR_DualAnimPlays( const char *label );
 void R_StudioSetDualPose( qboolean on, const char *model, const float *origin, const float *vang );
 int R_StudioDualHits( void );
+int R_StudioDualPoints( void );
 void VR_ReloadTick( void );
 void VR_ReloadSetGunPose( const vec3_t origin, const vec3_t angles, float scale );
 void VR_ReloadObserve( const char *label, float animtime );

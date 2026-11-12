@@ -149,6 +149,12 @@ static qboolean r_vr_mirror;		// the weapon is drawn mirrored (a left-handed wea
 static qboolean r_dual_hooked;	// the model being drawn is the left weapon of a dual wield
 static qboolean r_dual_on;	// the left weapon of a dual wield is being drawn: it is placed at the left hand
 static char r_dual_name[64];
+static int r_dual_points;	// meshes of the left weapon that went through the engine's drawing (debug)
+
+static qboolean R_StudioIsDualEntity( void )
+{
+	return r_dual_on && RI.currententity && RI.currententity->model && !Q_stricmp( RI.currententity->model->name, r_dual_name );
+}
 static vec3_t r_dual_origin, r_dual_angles;
 static int r_dual_hits;
 static qboolean r_force_builtin;	// the left weapon of a dual wield: draw it with this renderer
@@ -2144,9 +2150,12 @@ static void R_StudioDrawPoints( void )
 
 	g_studio.vr_filter = false;
 
-	if(( r_vr_viewmodel && ( RI.currententity == tr.viewent || RI.currententity == &vr_lhand_ent )) || ( r_dual_hooked && RI.currententity != tr.viewent && RI.currententity->model && !Q_stricmp( RI.currententity->model->name, r_dual_name )))
+	if(( r_vr_viewmodel && ( RI.currententity == tr.viewent || RI.currententity == &vr_lhand_ent )) || R_StudioIsDualEntity( ))
 	{
 		byte bonehide[MAXSTUDIOBONES];
+
+		if( R_StudioIsDualEntity( ))
+			r_dual_points++;
 		mstudiobone_t *vrbones = (mstudiobone_t *)((byte *)m_pStudioHeader + m_pStudioHeader->boneindex);
 		int nb = Q_min( m_pStudioHeader->numbones, MAXSTUDIOBONES );
 
@@ -3735,6 +3744,14 @@ void R_StudioSetDualPose( qboolean on, const char *model, const float *origin, c
 	r_dual_angles[0] = -vang[0];
 	r_dual_angles[1] = vang[1];
 	r_dual_angles[2] = vang[2];
+}
+
+int R_StudioDualPoints( void )
+{
+	int n = r_dual_points;
+
+	r_dual_points = 0;
+	return n;
 }
 
 int R_StudioDualHits( void )

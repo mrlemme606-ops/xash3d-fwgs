@@ -772,7 +772,13 @@ static void COF_FreezeDualAnim( cl_entity_t *e )
 	}
 
 	if( VR_DualAnimPlays( sd[seq].label ))
+	{
+		// an earlier hold set the rate to 0; the shot must run
+		if( e->curstate.framerate <= 0.0f )
+			e->curstate.framerate = 1.0f;
+
 		return;
+	}
 
 	// the game's own idle for the left weapon (it is a different pose than the right hand's: the switchblade is turned
 	// blade down, for example) stays as it is, held on its first frame
@@ -784,23 +790,10 @@ static void COF_FreezeDualAnim( cl_entity_t *e )
 		return;
 	}
 
-	// other animations that are held (drawing, reloading): back to the idle the game used last, else the first one
-	if( last_idle >= 0 && last_idle < hdr->numseq )
-		idle = last_idle;
-	else
-	{
-		for( i = 0; i < hdr->numseq; i++ )
-		{
-			if( VR_IsIdleLabel( sd[i].label ))
-			{
-				idle = i;
-				break;
-			}
-		}
-	}
-
-	e->curstate.sequence = idle;
-	e->curstate.frame = 0.0f;
+	// other animations that are held (drawing, reloading): the sequence stays and jumps to its last frame, which is the
+	// ready pose of this weapon. Nothing wrong shows while the game has not switched to its idle yet
+	(void)idle; (void)i;
+	e->curstate.frame = ( sd[seq].numframes > 1 ) ? (float)( sd[seq].numframes - 1 ) : 0.0f;
 	e->curstate.framerate = 0.0f;
 }
 

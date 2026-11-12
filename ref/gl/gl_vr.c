@@ -2049,8 +2049,18 @@ static void VR_DualLoadSettings( const char *model )
 
 	if( gEngfuncs.fsapi->FileExists( file, false ))
 	{
+		char fbase[48];
+
 		Q_snprintf( cmd, sizeof( cmd ), "exec %s\n", file );
 		gEngfuncs.Cbuf_AddText( cmd );
+
+		// the arm cut of these two is set after the file, so it is the same for everyone
+		VR_ModelBaseName( model, fbase, sizeof( fbase ));
+
+		if( !Q_stricmp( fbase, "v_branch" ))
+			gEngfuncs.Cbuf_AddText( "vr_dual_cut 4\nvr_dual_cut_pitch -30\n" );
+		else if( !Q_stricmp( fbase, "v_switchblade" ))
+			gEngfuncs.Cbuf_AddText( "vr_dual_cut 5\n" );
 	}
 	else
 	{
@@ -2073,6 +2083,14 @@ static void VR_DualLoadSettings( const char *model )
 
 			for( k = 0; k < 7; k++ )
 				gEngfuncs.Cvar_SetValue( vr_dual_keys[k], defaults[i].v[k] );
+
+			if( !Q_stricmp( base, "v_branch" ))
+			{
+				gEngfuncs.Cvar_SetValue( "vr_dual_cut", 4.0f );
+				gEngfuncs.Cvar_SetValue( "vr_dual_cut_pitch", -30.0f );
+			}
+			else
+				gEngfuncs.Cvar_SetValue( "vr_dual_cut", 5.0f );
 		}
 	}
 }
@@ -2196,15 +2214,16 @@ void VR_DrawDualWeapon( void )
 	if( vr_dual_debug.value )
 	{
 		static double next;
-		static int hits;
+		static int hits, points;
 
 		hits += R_StudioDualHits();
+		points += R_StudioDualPoints();
 
 		if( ( gp_cl ? gp_cl->time : 0.0 ) >= next )
 		{
-			gEngfuncs.Con_Printf( "VR dual: model %s, hand origin %.0f %.0f %.0f, angles %.0f %.0f %.0f, entity pose %s, studio hook %d\n",
-				model, origin[0], origin[1], origin[2], vang[0], vang[1], vang[2], wrote ? "written" : "NOT written (address check failed)", hits );
-			hits = 0;
+			gEngfuncs.Con_Printf( "VR dual: model %s, hand origin %.0f %.0f %.0f, angles %.0f %.0f %.0f, entity pose %s, studio hook %d, meshes through the engine %d\n",
+				model, origin[0], origin[1], origin[2], vang[0], vang[1], vang[2], wrote ? "written" : "NOT written (address check failed)", hits, points );
+			hits = points = 0;
 			next = ( gp_cl ? gp_cl->time : 0.0 ) + 1.0;
 		}
 	}

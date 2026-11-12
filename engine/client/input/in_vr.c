@@ -119,7 +119,7 @@ static CVAR_DEFINE_AUTO( vr_move_digital, "0", FCVAR_ARCHIVE, "1 = the left stic
 static CVAR_DEFINE_AUTO( vr_use_aim, "2", FCVAR_ARCHIVE, "what the use key (right grip) aims along: 0 = your head, 1 = the exact point your hand ray hits, 2 = the direction your hand points" );
 static CVAR_DEFINE_AUTO( vr_melee_enable, "1", FCVAR_ARCHIVE, "1 = swinging your hand fast with a melee weapon attacks" );
 static CVAR_DEFINE_AUTO( vr_melee_speed, "3.5", FCVAR_ARCHIVE, "hand speed in m/s that counts as a swing" );
-static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.1", FCVAR_ARCHIVE, "seconds between two swings (a swing has to slow down before the next one counts anyway)" );
+static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.45", FCVAR_ARCHIVE, "seconds between two swings (a swing has to slow down before the next one counts anyway)" );
 static CVAR_DEFINE_AUTO( vr_key_swing, "mouse1", FCVAR_ARCHIVE, "key pressed when you swing a melee weapon" );
 static CVAR_DEFINE_AUTO( vr_key_whip, "mouse2", FCVAR_ARCHIVE, "key pressed when you swing a gun (pistol whip). empty = nothing" );
 static CVAR_DEFINE_AUTO( vr_key_reload, "r", FCVAR_ARCHIVE, "key pressed for you when a manual reload is finished (the game then does the actual reload)" );
