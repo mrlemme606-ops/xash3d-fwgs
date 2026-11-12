@@ -844,6 +844,18 @@ static void IN_VRMoveCursor( void )
 	UI_MouseMove( x, y );
 }
 
+// every rendered frame, also when no game is running (the Xash menu over the main menu map, or no map at all): says that a
+// menu wants the cursor and moves it where the right hand points
+void IN_VRMenuFrame( void )
+{
+	float menu = ( cls.key_dest != key_game || host.mouse_visible ) ? 1.0f : 0.0f;
+
+	if( vr_in_menu.value != menu )
+		Cvar_DirectSetValue( &vr_in_menu, menu );
+
+	IN_VRMoveCursor();
+}
+
 void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 {
 	float yaw = 0.0f;
@@ -1398,6 +1410,10 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 
 	// turning (snap or smooth) changes the body direction, the same way the mouse does
 	x = vr_in_turn.value;
+
+	// the quick slot selector is open (right stick held up): the stick does not turn you, whatever it does sideways
+	if( vr_qs_active && vr_up_latched )
+		x = 0.0f;
 
 	if( vr_turn_mode.value )
 	{

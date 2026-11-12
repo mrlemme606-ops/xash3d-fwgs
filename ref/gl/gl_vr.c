@@ -230,6 +230,7 @@ static CVAR_DEFINE_AUTO( vr_dual_debug, "0", 0, "1 = print once a second whether
 static CVAR_DEFINE_AUTO( vr_dual_cut, "6", FCVAR_ARCHIVE, "where the arm of the left hand weapon is cut off, in units behind the hand (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: pitch degrees (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: yaw degrees (saved with vr_weapon_save_left)" );
+static CVAR_DEFINE_AUTO( vr_dual_clip_all, "1", FCVAR_ARCHIVE, "1 = the left weapon of a dual wield is cut behind the wrist with vr_dual_cut (it is drawn by the game, so this cuts everything behind the plane)" );
 static CVAR_DEFINE_AUTO( vr_dual_clip_tex, "", FCVAR_ARCHIVE, "extra texture name fragments of the left weapon's arm that are cut off behind the wrist (separate with +). vr_vm_dump_tex 1 lists the textures" );
 static CVAR_DEFINE_AUTO( vr_dual_anim_hold, "idle+draw+holster+equip+deploy+reload+pull+hide+show+inspect+fidget+lean+sprint+walk+run", FCVAR_ARCHIVE, "animation names (part of the name, separated by +) that a gun on the left hand does NOT play" );
 static CVAR_DEFINE_AUTO( vr_dual_anim_play, "shoot+fire+shot", FCVAR_ARCHIVE, "parts of the animation names of the left weapon that are allowed to play. Everything else (idle, draw, melee, reload...) holds the first idle pose" );
@@ -460,6 +461,7 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_anim_hold );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_clip_tex );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_clip_all );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_own );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_anim_play );
@@ -2111,22 +2113,18 @@ static qboolean VR_GetDualPose( const char *model, vec3_t origin, float *vang, f
 
 	VR_ModelBaseName( model, base, sizeof( base ));
 
-	// the other hand: the right hand's hold reflected across the body's middle plane ...
-	gx = VR_WeaponNumber( base, "vr_vm_grip_x", 0.0f );
-	gy = -VR_WeaponNumber( base, "vr_vm_grip_y", 0.0f );
-	gz = VR_WeaponNumber( base, "vr_vm_grip_z", 0.0f );
-	wp = VR_WeaponNumber( base, "vr_vm_pitch", 0.0f );
-	wy = -VR_WeaponNumber( base, "vr_vm_yaw", 0.0f );
-	wr = -VR_WeaponNumber( base, "vr_vm_roll", 0.0f );
+	gx = bound( -40.0f, VR_WeaponNumber( base, "vr_vm_grip_x", 0.0f ) + vr_dual_x.value, 40.0f );
+	gy = bound( -40.0f, VR_WeaponNumber( base, "vr_vm_grip_y", 0.0f ) + vr_dual_y.value, 40.0f );
+	gz = bound( -40.0f, VR_WeaponNumber( base, "vr_vm_grip_z", 0.0f ) + vr_dual_z.value, 40.0f );
+	wp = VR_WeaponNumber( base, "vr_vm_pitch", 0.0f ) + vr_dual_pitch.value;
+	wy = VR_WeaponNumber( base, "vr_vm_yaw", 0.0f ) + vr_dual_yaw.value;
+	wr = VR_WeaponNumber( base, "vr_vm_roll", 0.0f ) + vr_dual_roll.value;
 
-	// ... and the left hand's own numbers (vr_dual_*) are added to that as they are, so a weapon that is held differently
-	// on the left (the knife turned down, the branch) is set with them directly
-	gx = bound( -40.0f, gx + vr_dual_x.value, 40.0f );
-	gy = bound( -40.0f, gy + vr_dual_y.value, 40.0f );
-	gz = bound( -40.0f, gz + vr_dual_z.value, 40.0f );
-	wp += vr_dual_pitch.value;
-	wy += vr_dual_yaw.value;
-	wr += vr_dual_roll.value;
+	// the other hand: the same hold, reflected across the body's middle plane (as it always was; the left hand settings
+	// vr_dual_* are part of the hold that is reflected)
+	gy = -gy;
+	wy = -wy;
+	wr = -wr;
 	*scale = VR_WeaponNumber( base, "vr_vm_scale", 0.5f ) * vr_dual_scale.value;
 
 	VectorCopy( vr.hand[0].fwd, bf );
@@ -2185,7 +2183,13 @@ void VR_DrawDualWeapon( void )
 	// followed the arm but did not turn with the hand
 	R_StudioForceBuiltin( vr_dual_builtin.value != 0.0f );
 	R_StudioSetDualPose( true, model, origin, vang );
+
+	// the arm and sleeve behind the wrist are cut off with a clip plane around the whole weapon (the game draws this weapon
+	// itself, so the mesh by mesh cut of the right hand cannot be used). vr_dual_cut, vr_dual_cut_pitch, vr_dual_cut_yaw
+	VR_ViewModelClip( vr_dual_clip_all.value != 0.0f );
 	wrote = VR_CofDrawDual( origin, vang );
+	VR_ViewModelClip( false );
+
 	R_StudioSetDualPose( false, model, origin, vang );
 	R_StudioForceBuiltin( false );
 

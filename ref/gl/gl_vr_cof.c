@@ -43,7 +43,7 @@ static CVAR_DEFINE_AUTO( vr_cof_eyeorigin, "1", FCVAR_ARCHIVE, "1 = centre the c
 static CVAR_DEFINE_AUTO( vr_cof_depth, "0.8", 0, "far end of the depth range the world is drawn in while the game's client.dll is attached (it keeps 0.8 to 1.0 for its sky). 1 = off" );
 static CVAR_DEFINE_AUTO( vr_cof_watersize, "1", FCVAR_ARCHIVE, "1 = tell the game's water effect the size of the eye picture (it copies the screen from the bottom left corner at the window size). Experimental" );
 static CVAR_DEFINE_AUTO( vr_cof_watercomp, "1", FCVAR_ARCHIVE, "the game's own water reflection is a copy of the picture shifted 'up' on the screen. 1 = shift towards the real up of the world (stable when you tilt your head), -1 = the other way round, 0 = shift along the screen like the flat game" );
-static CVAR_DEFINE_AUTO( vr_cof_waterscale, "1", FCVAR_ARCHIVE, "how far the game's water reflection is shifted (1 = like the flat game)" );
+static CVAR_DEFINE_AUTO( vr_cof_waterscale, "0.5", FCVAR_ARCHIVE, "how far the game's water reflection is shifted (1 = like the flat game)" );
 static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepass while the client.dll re-arm is working (normally not needed)" );
 
 #if defined( _WIN32 )
@@ -749,6 +749,8 @@ qboolean VR_CofSlotName( int slot, char *out, size_t size )
 // (The weapon is a plain cl_entity_t inside client.dll, so its animation can be set right here before it is drawn.)
 static void COF_FreezeDualAnim( cl_entity_t *e )
 {
+	static const void *last_model;
+	static int last_idle = -1;
 	studiohdr_t *hdr;
 	mstudioseqdesc_t *sd;
 	int i, seq = e->curstate.sequence, idle = 0;
@@ -763,15 +765,37 @@ static void COF_FreezeDualAnim( cl_entity_t *e )
 
 	sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex );
 
+	if( last_model != e->model )
+	{
+		last_model = e->model;
+		last_idle = -1;
+	}
+
 	if( VR_DualAnimPlays( sd[seq].label ))
 		return;
 
-	for( i = 0; i < hdr->numseq; i++ )
+	// the game's own idle for the left weapon (it is a different pose than the right hand's: the switchblade is turned
+	// blade down, for example) stays as it is, held on its first frame
+	if( VR_IsIdleLabel( sd[seq].label ))
 	{
-		if( VR_IsIdleLabel( sd[i].label ))
+		last_idle = seq;
+		e->curstate.frame = 0.0f;
+		e->curstate.framerate = 0.0f;
+		return;
+	}
+
+	// other animations that are held (drawing, reloading): back to the idle the game used last, else the first one
+	if( last_idle >= 0 && last_idle < hdr->numseq )
+		idle = last_idle;
+	else
+	{
+		for( i = 0; i < hdr->numseq; i++ )
 		{
-			idle = i;
-			break;
+			if( VR_IsIdleLabel( sd[i].label ))
+			{
+				idle = i;
+				break;
+			}
 		}
 	}
 
