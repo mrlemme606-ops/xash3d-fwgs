@@ -230,8 +230,8 @@ static CVAR_DEFINE_AUTO( vr_dual_debug, "0", 0, "1 = print once a second whether
 static CVAR_DEFINE_AUTO( vr_dual_cut, "6", FCVAR_ARCHIVE, "where the arm of the left hand weapon is cut off, in units behind the hand (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: pitch degrees (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: yaw degrees (saved with vr_weapon_save_left)" );
-static CVAR_DEFINE_AUTO( vr_dual_nomirror, "branch+switchblade", FCVAR_ARCHIVE, "weapons (part of the model name, separated by +) that are held on the left hand exactly as on the right, not reflected. The branch and the switchblade are held differently in the game's dual wield" );
 static CVAR_DEFINE_AUTO( vr_dual_clip_tex, "", FCVAR_ARCHIVE, "extra texture name fragments of the left weapon's arm that are cut off behind the wrist (separate with +). vr_vm_dump_tex 1 lists the textures" );
+static CVAR_DEFINE_AUTO( vr_dual_anim_hold, "idle+draw+holster+equip+deploy+reload+pull+hide+show+inspect+fidget+lean+sprint+walk+run", FCVAR_ARCHIVE, "animation names (part of the name, separated by +) that a gun on the left hand does NOT play" );
 static CVAR_DEFINE_AUTO( vr_dual_anim_play, "shoot+fire+shot", FCVAR_ARCHIVE, "parts of the animation names of the left weapon that are allowed to play. Everything else (idle, draw, melee, reload...) holds the first idle pose" );
 static CVAR_DEFINE_AUTO( vr_dual_builtin, "1", FCVAR_ARCHIVE, "1 = the left weapon of a dual wield is drawn by the engine's own studio renderer (it then turns with your hand). 0 = the game's renderer" );
 static CVAR_DEFINE_AUTO( vr_melee_aim, "1", FCVAR_ARCHIVE, "1 = a swing is aimed at where the tip of the weapon is. 0 = the old way, along the direction of the swing" );
@@ -457,9 +457,9 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_cut_pitch );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_cut_yaw );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_anim_play );
-	gEngfuncs.Cvar_RegisterVariable( &vr_dual_nomirror );
-	gEngfuncs.Cvar_RegisterVariable( &vr_dual_clip_tex );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_anim_hold );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_debug );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_clip_tex );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_own );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_anim_play );
@@ -1529,9 +1529,39 @@ void VR_SetDualPass( qboolean on )
 	vr_dual_pass = on;
 }
 
+static void VR_ModelBaseName( const char *modelname, char *out, size_t size );
+
 qboolean VR_DualAnimPlays( const char *label )
 {
-	return VR_ListMatches( vr_dual_anim_play.string, label, false );
+	static char last[64];
+	static int seen;
+	qboolean plays;
+	char base[48];
+
+	if( !label || !label[0] )
+		return false;
+
+	// the animations named in vr_dual_anim_play always play
+	plays = VR_ListMatches( vr_dual_anim_play.string, label, false );
+
+	// a gun on the left hand also plays every animation that is not idle, drawing or reloading (the name of its firing
+	// animation is not known for every weapon). A weapon that is swung by hand never plays any
+	if( !plays && vr_dual_model[0] )
+	{
+		VR_ModelBaseName( vr_dual_model, base, sizeof( base ));
+
+		if( !VR_ListMatches( vr_melee_models.string, base, true ))
+			plays = !VR_ListMatches( vr_dual_anim_hold.string, label, false );
+	}
+
+	if( vr_dual_debug.value && Q_strncmp( last, label, sizeof( last ) - 1 ))
+	{
+		Q_strncpy( last, label, sizeof( last ));
+		gEngfuncs.Con_Printf( "VR dual: left weapon '%s' animation '%s' -> %s\n", vr_dual_model, label, plays ? "plays" : "held still" );
+		seen++;
+	}
+
+	return plays;
 }
 
 // called by the studio renderer for every mesh of the weapon model while it is drawn at the hand
@@ -2081,22 +2111,23 @@ static qboolean VR_GetDualPose( const char *model, vec3_t origin, float *vang, f
 
 	VR_ModelBaseName( model, base, sizeof( base ));
 
-	gx = bound( -40.0f, VR_WeaponNumber( base, "vr_vm_grip_x", 0.0f ) + vr_dual_x.value, 40.0f );
-	gy = bound( -40.0f, VR_WeaponNumber( base, "vr_vm_grip_y", 0.0f ) + vr_dual_y.value, 40.0f );
-	gz = bound( -40.0f, VR_WeaponNumber( base, "vr_vm_grip_z", 0.0f ) + vr_dual_z.value, 40.0f );
-	wp = VR_WeaponNumber( base, "vr_vm_pitch", 0.0f ) + vr_dual_pitch.value;
-	wy = VR_WeaponNumber( base, "vr_vm_yaw", 0.0f ) + vr_dual_yaw.value;
-	wr = VR_WeaponNumber( base, "vr_vm_roll", 0.0f ) + vr_dual_roll.value;
-	*scale = VR_WeaponNumber( base, "vr_vm_scale", 0.5f ) * vr_dual_scale.value;
+	// the other hand: the right hand's hold reflected across the body's middle plane ...
+	gx = VR_WeaponNumber( base, "vr_vm_grip_x", 0.0f );
+	gy = -VR_WeaponNumber( base, "vr_vm_grip_y", 0.0f );
+	gz = VR_WeaponNumber( base, "vr_vm_grip_z", 0.0f );
+	wp = VR_WeaponNumber( base, "vr_vm_pitch", 0.0f );
+	wy = -VR_WeaponNumber( base, "vr_vm_yaw", 0.0f );
+	wr = -VR_WeaponNumber( base, "vr_vm_roll", 0.0f );
 
-	// the other hand: the same hold, reflected across the body's middle plane. (The branch and the switchblade are held
-	// differently on the left in the game; their left hand settings are made for the hold as it is, not reflected)
-	if( !VR_ListMatches( vr_dual_nomirror.string, base, true ))
-	{
-		gy = -gy;
-		wy = -wy;
-		wr = -wr;
-	}
+	// ... and the left hand's own numbers (vr_dual_*) are added to that as they are, so a weapon that is held differently
+	// on the left (the knife turned down, the branch) is set with them directly
+	gx = bound( -40.0f, gx + vr_dual_x.value, 40.0f );
+	gy = bound( -40.0f, gy + vr_dual_y.value, 40.0f );
+	gz = bound( -40.0f, gz + vr_dual_z.value, 40.0f );
+	wp += vr_dual_pitch.value;
+	wy += vr_dual_yaw.value;
+	wr += vr_dual_roll.value;
+	*scale = VR_WeaponNumber( base, "vr_vm_scale", 0.5f ) * vr_dual_scale.value;
 
 	VectorCopy( vr.hand[0].fwd, bf );
 	VectorCopy( vr.hand[0].left, bl );
@@ -3804,7 +3835,7 @@ static void VR_DrawQuickSlots( void )
 {
 	static cvar_t *on;
 	static qboolean was_open;
-	static vec3_t local;	// where the selector is, seen from the head: it goes with you when you walk or turn your head
+	static vec3_t local;	// where the hand was when the selector opened, measured from the head position (not turned with the head)
 	static const float glyph[3][12] =
 	{
 		{ -0.25f, -0.5f, 0.0f, 0.5f, 0.0f, -0.5f, 0, 0, 0, 0, 0, 0 },	// 1: flag, then the stem
@@ -3823,15 +3854,15 @@ static void VR_DrawQuickSlots( void )
 		return;
 	}
 
-	// when the stick is pushed forward: remember where the hand is. The boxes stay there, over the place of the hand,
-	// and turn to face you whichever way you look or walk (they do not go round with your head)
+	// when the stick is pushed forward: remember where the hand is, measured from the head's position. The boxes stay over
+	// that place of the hand, go along when you walk, and turn to face you whichever way you look
 	if( !was_open )
 	{
-		VectorCopy( vr.hand[1].pos, local );
+		VectorSubtract( vr.hand[1].pos, vr.head_game, local );
 		was_open = true;
 	}
 
-	VectorCopy( local, start );
+	VectorAdd( vr.head_game, local, start );
 
 	// the boxes face the head: their right is across the line from the hand to the eyes
 	VectorSubtract( vr.head_game, start, to_eye );
@@ -3895,7 +3926,7 @@ static void VR_DrawQuickSlots( void )
 		static int tex[3];
 		char name[64], path[128];
 		float ox = ( i == 0 ) ? -8.0f : ( i == 2 ? 8.0f : 0.0f );
-		float oz = ( i == 1 ) ? 8.0f : 3.0f, hw = 3.2f, hh = 1.8f;
+		float oz = ( i == 1 ) ? 8.0f : 3.0f, hw = 3.0f, hh = 3.0f;
 		vec3_t c, p[4];
 		int on_this = ( selected == i + 1 ), has_tex = 0;
 
