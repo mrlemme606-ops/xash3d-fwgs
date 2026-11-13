@@ -106,7 +106,9 @@ static CVAR_DEFINE_AUTO( vr_in_noswing, "0", 0, "(internal) no melee swings righ
 static CVAR_DEFINE_AUTO( vr_in_reload, "0", 0, "(internal) the reload system finished a manual reload: press the reload key" );
 
 // settings
-static CVAR_DEFINE_AUTO( vr_turn_mode, "1", FCVAR_ARCHIVE, "0 = snap turn, 1 = smooth turn" );
+static CVAR_DEFINE_AUTO( vr_turn_mode, "1", FCVAR_ARCHIVE, "0 = snap turn, 1 = smooth turn, 2 = no turning" );
+static CVAR_DEFINE_AUTO( vr_move_ref, "0", FCVAR_ARCHIVE, "what the left stick walks along: 0 = where your head looks, 1 = where your left hand points" );
+static CVAR_DEFINE_AUTO( vr_menu_debug, "0", 0, "1 = print every command the game sends (helps find the button of the game's own main menu that opens the options)" );
 static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in degrees" );
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
 static CVAR_DEFINE_AUTO( vr_aim_mode, "2", FCVAR_ARCHIVE, "what the game aims, uses and shoots along: 0 = body (mouse), 1 = head, 2 = right hand while you use/shoot and head otherwise (default), 3 = right hand always" );
@@ -244,6 +246,11 @@ qboolean IN_VRGetRay( vec3_t origin, vec3_t dir )
 
 // ---- the keyboard of the computer screen: a plain QWERTY (a-z, 0-9) drawn over the screen, typed with the laser and trigger
 static int vr_cursor_px, vr_cursor_py;
+static int vr_menu_page;	// our own pause menu: 0 closed, 1 pause, 2 options, 3 load game
+static void IN_VRMenuDraw( void );
+static void IN_VRMenuClick( void );
+static qboolean IN_VRMenuToggle( void );
+static void IN_VRMenu_f( void );
 static qboolean kbd_manual, kbd_dismissed, kbd_cmd_open, kbd_comp_open;
 static void IN_VRTypeChar( int ch );
 
@@ -318,6 +325,7 @@ static void IN_VRDrawQuickSlots( void )
 void IN_VRDrawKeyboard( void )
 {
 	IN_VRDrawQuickSlots();
+	IN_VRMenuDraw();
 
 	int x0, y0, c, row, col, ch;
 	qboolean hit;
@@ -527,6 +535,13 @@ void IN_VRUserMsg( const char *name, const byte *buf, int size )
 // every command the game's client sends (from cl_game.c)
 void IN_VRClientCmd( const char *cmd )
 {
+	if( vr_menu_debug.value )
+		Con_Printf( "VR game command: %s\n", cmd );
+
+	// the options button of the game's own main menu opens ours
+	if( !vr_menu_page && cls.state == ca_active && Q_stristr( cmd, "option" ) && Q_stristr( clgame.mapname, "c_game_menu" ))
+		vr_menu_page = 2;
+
 	if( !Q_strnicmp( cmd, "stopcomputer", 12 ))
 		kbd_comp_open = false;
 }
@@ -542,6 +557,7 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_kbd_closed );
 	Cvar_RegisterVariable( &vr_in_room_quiet );
 	Cvar_RegisterVariable( &vr_quiet_steps );
+	Cmd_AddCommand( "vr_menu", IN_VRMenu_f, "open or close the VR pause menu" );
 	Cmd_AddCommand( "vr_keyboard", IN_VRKeyboard_f, "open or close the SteamVR keyboard for the text box you are typing in" );
 	Cvar_RegisterVariable( &vr_in_room_x );
 	Cvar_RegisterVariable( &vr_in_room_y );
@@ -622,6 +638,8 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_in_noswing );
 	Cvar_RegisterVariable( &vr_in_reload );
 	Cvar_RegisterVariable( &vr_turn_mode );
+	Cvar_RegisterVariable( &vr_move_ref );
+	Cvar_RegisterVariable( &vr_menu_debug );
 	Cvar_RegisterVariable( &vr_snap_angle );
 	Cvar_RegisterVariable( &vr_smooth_speed );
 	Cvar_RegisterVariable( &vr_aim_mode );
@@ -696,7 +714,13 @@ static void IN_VRUpdateButtons( int buttons )
 			if( i == VRB_RSTICK && ( !ks[0] || !Q_strcmp( ks, "!special" )))
 				ks = "!weapontoggle";
 			if( i == VRB_Y && ( !ks[0] || !Q_strcmp( ks, "i" )))
+			{
+				// our own pause menu; the Xash menu stays on the keyboard's escape
+				if( IN_VRMenuToggle( ))
+					continue;
+
 				ks = "escape";
+			}
 
 			// sprinting backwards is a dodge (the game's +dodge) instead
 			if( i == VRB_LSTICK && vr_in_move_fwd.value < -0.5f && cls.state == ca_active && cls.key_dest == key_game )
@@ -734,6 +758,13 @@ static void IN_VRUpdateButtons( int buttons )
 			// (but never while a screen with a cursor is open: the inventory and the computer need the trigger to click)
 			if( i == VRB_RTRIGGER && vr_in_melee.value > 0.5f && cls.key_dest == key_game && vr_in_menu.value < 0.5f )
 				continue;
+
+			// our pause menu: the trigger clicks its buttons, and the game never sees that click
+			if( key == K_MOUSE1 && vr_menu_page )
+			{
+				IN_VRMenuClick( );
+				continue;
+			}
 
 			// the computer's keyboard: a click on a key types it, and the game never sees that click
 			if( key == K_MOUSE1 && IN_VRKbdShown())
@@ -800,7 +831,7 @@ static void IN_VRMoveCursor( void )
 	if( vr_in_ui_hit.value < 0.5f )
 		return;
 
-	if( cls.key_dest != key_menu && !host.mouse_visible )
+	if( cls.key_dest != key_menu && !host.mouse_visible && !vr_menu_page )
 		return;
 
 	x = (int)( vr_in_ui_x.value * refState.width );
@@ -844,11 +875,412 @@ static void IN_VRMoveCursor( void )
 	UI_MouseMove( x, y );
 }
 
+
+// ---- our own pause menu (Y on the left controller) and the options, drawn like the keyboard of the computer and clicked
+// with the right laser and trigger. The Xash menu stays on the keyboard's escape key.
+#define VM_ID_BACK	99
+
+typedef struct
+{
+	const char *label;
+	const char *cvar;
+	float min, max, step;
+	int kind;		// 0 number, 1 choice, 2 on/off, 3 percent
+	const char *names[3];
+} vr_opt_t;
+
+static const vr_opt_t vr_opts[] =
+{
+	{ "MOVEMENT DIRECTION", "vr_move_ref", 0, 1, 1, 1, { "HEAD", "LEFT HAND", NULL } },
+	{ "TURNING", "vr_turn_mode", 0, 2, 1, 1, { "SNAP", "SMOOTH", "OFF" } },
+	{ "SMOOTH TURN SPEED", "vr_smooth_speed", 30, 300, 15, 0, { NULL, NULL, NULL } },
+	{ "SNAP TURN ANGLE", "vr_snap_angle", 15, 90, 15, 0, { NULL, NULL, NULL } },
+	{ "WALK AROUND YOUR ROOM", "vr_roomscale", 0, 1, 1, 2, { NULL, NULL, NULL } },
+	{ "MELEE BY SWINGING", "vr_melee_enable", 0, 1, 1, 2, { NULL, NULL, NULL } },
+	{ "SOUND VOLUME", "volume", 0, 1, 0.1f, 3, { NULL, NULL, NULL } },
+	{ "MUSIC VOLUME", "MP3Volume", 0, 1, 0.1f, 3, { NULL, NULL, NULL } },
+	{ "BRIGHTNESS", "brightness", 0, 1, 0.1f, 3, { NULL, NULL, NULL } },
+};
+
+static const char *vr_menu_saves[] = { "cofsave1", "cofsave2", "cofsave3", "cofsave4", "cofsave5", "autosave", "quick" };
+
+typedef struct
+{
+	char text[48];
+	char value[32];
+	int id;
+} vr_mitem_t;
+
+static int vr_menu_hover = -1, vr_menu_confirm = -1, vr_menu_bgtex = -2, vr_menu_from;
+static qboolean vr_menu_we_paused;
+
+static void IN_VRMenuOpen( int page )
+{
+	if( !vr_menu_page && cls.state == ca_active && !cl.paused && !Q_stristr( clgame.mapname, "c_game_menu" ))
+	{
+		Cbuf_AddText( "pause\\n" );
+		vr_menu_we_paused = true;
+	}
+
+	vr_menu_from = 0;
+	vr_menu_page = page;
+	vr_menu_confirm = -1;
+	vr_menu_hover = -1;
+}
+
+static void IN_VRMenuClose( void )
+{
+	if( vr_menu_we_paused && cls.state == ca_active )
+		Cbuf_AddText( "pause\\n" );
+
+	vr_menu_we_paused = false;
+	vr_menu_page = 0;
+	vr_menu_confirm = -1;
+	vr_menu_hover = -1;
+}
+
+static qboolean IN_VRMenuToggle( void )
+{
+	if( !Cvar_VariableInteger( "vr_enable" ) || cls.state != ca_active )
+		return false;
+
+	if( vr_menu_page )
+	{
+		IN_VRMenuClose( );
+		return true;
+	}
+
+	// an inventory or the computer is open: Y still closes that one
+	if( cls.key_dest != key_game || host.mouse_visible || Q_stristr( clgame.mapname, "c_game_menu" ))
+		return false;
+
+	IN_VRMenuOpen( 1 );
+	return true;
+}
+
+static void IN_VRMenu_f( void )
+{
+	if( vr_menu_page )
+		IN_VRMenuClose( );
+	else if( cls.state == ca_active )
+		IN_VRMenuOpen( 1 );
+}
+
+static void IN_VRMenuOptionValue( const vr_opt_t *o, char *out, size_t size )
+{
+	float v = Cvar_VariableValue( o->cvar );
+
+	if( o->kind == 1 )
+	{
+		int n = bound( 0, (int)( v - o->min + 0.5f ), 2 );
+
+		Q_strncpy( out, o->names[n] ? o->names[n] : "?", size );
+	}
+	else if( o->kind == 2 )
+		Q_strncpy( out, v > 0.5f ? "ON" : "OFF", size );
+	else if( o->kind == 3 )
+		Q_snprintf( out, size, "%d%%", (int)( v * 100.0f + 0.5f ));
+	else
+		Q_snprintf( out, size, "%d", (int)( v + 0.5f ));
+}
+
+static int IN_VRMenuItems( vr_mitem_t *items )
+{
+	int n = 0, i;
+
+	if( vr_menu_page == 1 )
+	{
+		static const char *names[] = { "RESUME", "LOAD GAME", "OPTIONS", "QUIT TO MAIN MENU", "QUIT TO DESKTOP" };
+
+		for( i = 0; i < 5; i++ )
+		{
+			Q_strncpy( items[n].text, names[i], sizeof( items[n].text ));
+			items[n].value[0] = 0;
+			items[n].id = i + 1;
+
+			// the two quit buttons ask once more
+			if( vr_menu_confirm == i + 1 )
+				Q_strncpy( items[n].text, "CLICK AGAIN TO CONFIRM", sizeof( items[n].text ));
+
+			n++;
+		}
+	}
+	else if( vr_menu_page == 2 )
+	{
+		for( i = 0; i < (int)ARRAYSIZE( vr_opts ); i++ )
+		{
+			Q_strncpy( items[n].text, vr_opts[i].label, sizeof( items[n].text ));
+			IN_VRMenuOptionValue( &vr_opts[i], items[n].value, sizeof( items[n].value ));
+			items[n].id = 100 + i;
+			n++;
+		}
+
+		Q_strncpy( items[n].text, "BACK", sizeof( items[n].text ));
+		items[n].value[0] = 0;
+		items[n].id = VM_ID_BACK;
+		n++;
+	}
+	else if( vr_menu_page == 3 )
+	{
+		for( i = 0; i < (int)ARRAYSIZE( vr_menu_saves ); i++ )
+		{
+			if( !FS_FileExists( va( "save/%s.sav", vr_menu_saves[i] ), true ))
+				continue;
+
+			if( i < 5 )
+				Q_snprintf( items[n].text, sizeof( items[n].text ), "SAVE %d", i + 1 );
+			else
+				Q_strncpy( items[n].text, i == 5 ? "AUTOSAVE" : "QUICKSAVE", sizeof( items[n].text ));
+
+			items[n].value[0] = 0;
+			items[n].id = 200 + i;
+			n++;
+		}
+
+		if( !n )
+		{
+			Q_strncpy( items[n].text, "NO SAVED GAMES", sizeof( items[n].text ));
+			items[n].value[0] = 0;
+			items[n].id = 0;
+			n++;
+		}
+
+		Q_strncpy( items[n].text, "BACK", sizeof( items[n].text ));
+		items[n].value[0] = 0;
+		items[n].id = VM_ID_BACK;
+		n++;
+	}
+
+	return n;
+}
+
+static void IN_VRMenuLayout( int n, int *x0, int *y0, int *rw, int *rh, int *gap )
+{
+	int w = refState.width, h = refState.height;
+
+	*rw = w * 62 / 100;
+	*rh = Q_min( h * 8 / 100, (int)( h * 0.70f / Q_max( n, 1 ) * 0.84f ));
+	*gap = Q_max( *rh / 5, 2 );
+	*x0 = ( w - *rw ) / 2;
+	*y0 = h * 25 / 100;
+}
+
+static int IN_VRMenuHit( int px, int py, const vr_mitem_t *items, int n, int *part )
+{
+	int x0, y0, rw, rh, gap, i;
+
+	IN_VRMenuLayout( n, &x0, &y0, &rw, &rh, &gap );
+
+	for( i = 0; i < n; i++ )
+	{
+		int y = y0 + i * ( rh + gap );
+
+		if( px >= x0 && px < x0 + rw && py >= y && py < y + rh )
+		{
+			*part = ( px - x0 ) * 100 / rw;
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+static void IN_VRMenuCursorPos( int *px, int *py )
+{
+	// the position the trigger was aimed at (not where the pull moved the hand to)
+	*px = vr_cur_locked ? vr_cur_lock_x : vr_cursor_px;
+	*py = vr_cur_locked ? vr_cur_lock_y : vr_cursor_py;
+}
+
+static void IN_VRMenuChangeOption( const vr_opt_t *o, int part )
+{
+	float v = Cvar_VariableValue( o->cvar );
+
+	if( o->kind == 1 )
+	{
+		int count = o->names[2] ? 3 : 2;
+		int cur = bound( 0, (int)( v - o->min + 0.5f ), count - 1 );
+
+		cur = ( part < 50 ) ? ( cur + count - 1 ) % count : ( cur + 1 ) % count;
+		v = o->min + cur;
+	}
+	else if( o->kind == 2 )
+		v = ( v > 0.5f ) ? 0.0f : 1.0f;
+	else
+		v = bound( o->min, v + (( part < 50 ) ? -o->step : o->step ), o->max );
+
+	Cvar_SetValue( o->cvar, v );
+}
+
+static void IN_VRMenuClick( void )
+{
+	vr_mitem_t items[16];
+	int n = IN_VRMenuItems( items ), px, py, part = 0, hit, id;
+
+	IN_VRMenuCursorPos( &px, &py );
+	hit = IN_VRMenuHit( px, py, items, n, &part );
+
+	if( hit < 0 )
+	{
+		vr_menu_confirm = -1;
+		return;
+	}
+
+	id = items[hit].id;
+
+	if( !id )
+		return;
+
+	S_StartLocalSound( "UI/3d_click.wav", VOL_NORM, false );
+
+	if( id >= 100 && id < 200 )
+	{
+		IN_VRMenuChangeOption( &vr_opts[id - 100], part );
+		return;
+	}
+
+	if( id >= 200 )
+	{
+		Cbuf_AddText( va( "load %s\\n", vr_menu_saves[id - 200] ));
+		IN_VRMenuClose( );
+		return;
+	}
+
+	if(( id == 4 || id == 5 ) && vr_menu_confirm != id )
+	{
+		vr_menu_confirm = id;
+		return;
+	}
+
+	vr_menu_confirm = -1;
+
+	switch( id )
+	{
+	case 1:
+		IN_VRMenuClose( );
+		break;
+	case 2:
+		vr_menu_page = 3;
+		break;
+	case 3:
+		vr_menu_page = 2;
+		break;
+	case 4:
+		IN_VRMenuClose( );
+		Cbuf_AddText( "map c_game_menu1\\n" );
+		break;
+	case 5:
+		Cbuf_AddText( "quit\\n" );
+		break;
+	case VM_ID_BACK:
+		// the options of the game's own main menu go straight away, the rest goes back to the pause menu
+		if( Q_stristr( clgame.mapname, "c_game_menu" ))
+			IN_VRMenuClose( );
+		else vr_menu_page = 1;
+		break;
+	}
+
+	vr_menu_hover = -1;
+}
+
+static void IN_VRMenuDraw( void )
+{
+	vr_mitem_t items[16];
+	int w = refState.width, h = refState.height, n, i, x0, y0, rw, rh, gap, px, py, part = 0, hit = -1;
+	static cl_font_t font;
+	rgba_t white = { 235, 235, 235, 255 }, orange = { 255, 190, 60, 255 };
+	const char *title;
+	cl_font_t *f;
+	int lw, lh;
+
+	if( !vr_menu_page )
+		return;
+
+	// a map change closes the pause menu (the options of the game's own main menu stay)
+	if( cls.state != ca_active )
+	{
+		IN_VRMenuClose( );
+		return;
+	}
+
+	if( !font.valid && cls.creditsFont.rendermode )
+	{
+		if( !Con_LoadVariableWidthFont( "gfx/creditsfont.fnt", &font, 2.0f, cls.creditsFont.rendermode, TF_FONT ))
+			Con_LoadFixedWidthFont( "gfx/conchars", &font, 3.0f, cls.creditsFont.rendermode, TF_FONT | TF_NEAREST | TF_KEEP_SOURCE );
+	}
+
+	f = font.valid ? &font : &cls.creditsFont;
+
+	n = IN_VRMenuItems( items );
+	IN_VRMenuLayout( n, &x0, &y0, &rw, &rh, &gap );
+
+	if( vr_in_ui_hit.value > 0.5f )
+	{
+		IN_VRMenuCursorPos( &px, &py );
+		hit = IN_VRMenuHit( vr_cursor_px, vr_cursor_py, items, n, &part );
+		(void)px; (void)py;
+	}
+
+	if( hit >= 0 && !items[hit].id )
+		hit = -1;
+
+	if( hit != vr_menu_hover )
+	{
+		if( hit >= 0 )
+			S_StartLocalSound( "UI/3d_rollover.wav", VOL_NORM, false );
+
+		vr_menu_hover = hit;
+	}
+
+	ref.dllFuncs.R_Set2DMode( true );
+
+	// the picture of the menu (gfx/vr/menu_bg.tga), a plain dark panel if it is not there
+	if( vr_menu_bgtex == -2 )
+		vr_menu_bgtex = FS_FileExists( "gfx/vr/menu_bg.tga", false ) ? ref.dllFuncs.GL_LoadTexture( "gfx/vr/menu_bg.tga", NULL, 0, TF_IMAGE ) : 0;
+
+	if( vr_menu_bgtex > 0 )
+	{
+		ref.dllFuncs.GL_SetRenderMode( kRenderNormal );
+		ref.dllFuncs.Color4ub( 255, 255, 255, 255 );
+		ref.dllFuncs.R_DrawStretchPic( 0, 0, w, h, 0, 0, 1, 1, vr_menu_bgtex );
+	}
+	else ref.dllFuncs.FillRGBA( kRenderTransTexture, 0, 0, w, h, 8, 8, 8, 255 );
+
+	ref.dllFuncs.FillRGBA( kRenderTransTexture, 0, 0, w, h, 0, 0, 0, 110 );
+
+	title = ( vr_menu_page == 2 ) ? "OPTIONS" : ( vr_menu_page == 3 ? "LOAD GAME" : "PAUSED" );
+	CL_DrawStringLen( f, title, &lw, &lh, 0 );
+	CL_DrawString(( w - lw ) / 2, h * 13 / 100, title, white, f, FONT_DRAW_NORENDERMODE );
+
+	for( i = 0; i < n; i++ )
+	{
+		int y = y0 + i * ( rh + gap ), over = ( i == hit ), tw = 0, th = 0, vw = 0, vh = 0;
+		int pad = rw / 25;
+		byte *col = over ? orange : white;
+		char value[48];
+
+		ref.dllFuncs.FillRGBA( kRenderTransTexture, x0, y, rw, rh, over ? 90 : 15, over ? 60 : 15, over ? 15 : 15, over ? 225 : 190 );
+
+		CL_DrawStringLen( f, items[i].text, &tw, &th, 0 );
+		CL_DrawString( x0 + pad, y + ( rh - th ) / 2, items[i].text, col, f, FONT_DRAW_NORENDERMODE );
+
+		if( items[i].value[0] )
+		{
+			Q_snprintf( value, sizeof( value ), "<  %s  >", items[i].value );
+			CL_DrawStringLen( f, value, &vw, &vh, 0 );
+			CL_DrawString( x0 + rw - pad - vw, y + ( rh - vh ) / 2, value, col, f, FONT_DRAW_NORENDERMODE );
+		}
+	}
+
+	// where the right hand points (the panel's own dot is drawn by the renderer)
+	(void)part;
+}
+
 // every rendered frame, also when no game is running (the Xash menu over the main menu map, or no map at all): says that a
 // menu wants the cursor and moves it where the right hand points
 void IN_VRMenuFrame( void )
 {
-	float menu = ( cls.key_dest != key_game || host.mouse_visible ) ? 1.0f : 0.0f;
+	float menu = ( cls.key_dest != key_game || host.mouse_visible || vr_menu_page ) ? 1.0f : 0.0f;
 
 	if( vr_in_menu.value != menu )
 		Cvar_DirectSetValue( &vr_in_menu, menu );
@@ -866,7 +1298,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 
 	{
 		// the game's own inventory / save screens keep key_game but show a mouse cursor
-		float menu = ( cls.key_dest != key_game || host.mouse_visible ) ? 1.0f : 0.0f;
+		float menu = ( cls.key_dest != key_game || host.mouse_visible || vr_menu_page ) ? 1.0f : 0.0f;
 
 		if( vr_in_menu.value != menu )
 			Cvar_DirectSetValue( &vr_in_menu, menu );
@@ -1150,7 +1582,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	}
 
 	// the stick means "walk where I look". the game walks along its aim, so rotate the stick by the difference
-	rot = head_rel - aim_rel;
+	rot = (( vr_move_ref.value >= 0.5f ) ? vr_in_lhand_yaw.value : head_rel ) - aim_rel;
 	{
 		float a = DEG2RAD( rot );
 		float c = cos( a ), s = sin( a );
@@ -1415,7 +1847,11 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	if( vr_qs_active && vr_up_latched )
 		x = 0.0f;
 
-	if( vr_turn_mode.value )
+	if( vr_turn_mode.value >= 2.0f )
+	{
+		// no turning at all
+	}
+	else if( vr_turn_mode.value )
 	{
 		if( fabs( x ) > 0.05f )
 			yaw = -x * vr_smooth_speed.value * frametime;
