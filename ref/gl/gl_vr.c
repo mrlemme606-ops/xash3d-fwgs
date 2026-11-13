@@ -1957,7 +1957,7 @@ static const char *vr_builtin_profiles[][2] =
 {
 	{ "v_actions", "vr_vm_grip_x -12\nvr_vm_grip_y -20\nvr_vm_grip_z -11\nvr_vm_pitch -70\nvr_vm_yaw 80\nvr_vm_roll -10\nvr_vm_flip_roll 0\nvr_vm_scale 0.19\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_branch", "vr_vm_grip_x 13\nvr_vm_grip_y -6.5\nvr_vm_grip_z -8\nvr_vm_pitch 7\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 0.18\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0\nvr_scope_y 0\nvr_scope_z 3\nvr_scope_radius 1.2\nvr_scope_fov 10\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
-	{ "v_camera", "vr_vm_grip_x 10\nvr_vm_grip_y -5\nvr_vm_grip_z -3\nvr_vm_pitch 60\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_aim_pitch 70\nvr_vm_scale 0.02\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_rl_grip_radius 10\nvr_rl_grip_x 12\nvr_rl_grip_y 0\nvr_rl_grip_z -4\n" },
+	{ "v_camera", "vr_vm_grip_x 10\nvr_vm_grip_y -5\nvr_vm_grip_z -3\nvr_vm_pitch 60\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_aim_pitch 70\nvr_vm_scale 0.02\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_rl_grip_radius 10\nvr_rl_grip_x 12\nvr_rl_grip_y 0\nvr_rl_grip_z -4\n\nvr_anim_mask 8" },
 	{ "v_flare", "vr_vm_grip_x 12\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 0\nvr_vm_yaw 10\nvr_vm_roll 60\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_muzzle_x -4\nvr_muzzle_y 2\nvr_muzzle_z -12\n" },
 	{ "v_flashlight", "vr_vm_grip_x 8\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 100\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 1.2\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 100\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_g43", "vr_vm_grip_x 4\nvr_vm_grip_y -1.5\nvr_vm_grip_z -2\nvr_vm_pitch 0\nvr_vm_yaw 2.3\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.45\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_rl_grip_radius 8\nvr_rl_grip_x 16\nvr_rl_grip_y 0\nvr_rl_grip_z 0\n" },
@@ -2199,6 +2199,8 @@ void VR_DrawDualWeapon( void )
 
 	// the engine's own studio renderer honours the angles we give; the game's renderer for this second weapon
 	// followed the arm but did not turn with the hand
+	// the game draws this weapon with its own programs and states; nothing of that may reach the screens drawn later
+	pglPushAttrib( GL_ALL_ATTRIB_BITS );
 	R_StudioForceBuiltin( vr_dual_builtin.value != 0.0f );
 	R_StudioSetDualPose( true, model, origin, vang );
 
@@ -2210,6 +2212,13 @@ void VR_DrawDualWeapon( void )
 
 	R_StudioSetDualPose( false, model, origin, vang );
 	R_StudioForceBuiltin( false );
+
+	pglDisable( GL_CLIP_PLANE0 );
+	pglDisable( 0x8620 );	// GL_VERTEX_PROGRAM_ARB
+	pglDisable( 0x8804 );	// GL_FRAGMENT_PROGRAM_ARB
+	pglPopAttrib();
+	pglDepthMask( GL_TRUE );
+	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
 
 	if( vr_dual_debug.value )
 	{

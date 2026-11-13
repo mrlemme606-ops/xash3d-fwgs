@@ -749,11 +749,12 @@ qboolean VR_CofSlotName( int slot, char *out, size_t size )
 // (The weapon is a plain cl_entity_t inside client.dll, so its animation can be set right here before it is drawn.)
 static void COF_FreezeDualAnim( cl_entity_t *e )
 {
-	static const void *last_model;
-	static int last_idle = -1;
+	// the idle the game itself uses for the left weapon, remembered per model
+	static struct { const void *model; int idle; } known[8];
+	static int known_next;
 	studiohdr_t *hdr;
 	mstudioseqdesc_t *sd;
-	int i, seq = e->curstate.sequence, idle = 0;
+	int i, seq = e->curstate.sequence, slot = -1, idle = -1;
 
 	if( !e->model || e->model->type != mod_studio )
 		return;
@@ -765,10 +766,13 @@ static void COF_FreezeDualAnim( cl_entity_t *e )
 
 	sd = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex );
 
-	if( last_model != e->model )
+	for( i = 0; i < 8; i++ )
 	{
-		last_model = e->model;
-		last_idle = -1;
+		if( known[i].model == e->model )
+		{
+			slot = i;
+			break;
+		}
 	}
 
 	if( VR_DualAnimPlays( sd[seq].label ))
@@ -780,20 +784,50 @@ static void COF_FreezeDualAnim( cl_entity_t *e )
 		return;
 	}
 
-	// the game's own idle for the left weapon (it is a different pose than the right hand's: the switchblade is turned
+	// the game's own idle for the left weapon (a different pose than the right hand's: the switchblade is turned
 	// blade down, for example) stays as it is, held on its first frame
 	if( VR_IsIdleLabel( sd[seq].label ))
 	{
-		last_idle = seq;
+		if( slot < 0 )
+		{
+			slot = known_next++ & 7;
+			known[slot].model = e->model;
+		}
+
+		known[slot].idle = seq;
 		e->curstate.frame = 0.0f;
 		e->curstate.framerate = 0.0f;
 		return;
 	}
 
-	// other animations that are held (drawing, reloading): the sequence stays and jumps to its last frame, which is the
-	// ready pose of this weapon. Nothing wrong shows while the game has not switched to its idle yet
-	(void)idle; (void)i;
-	e->curstate.frame = ( sd[seq].numframes > 1 ) ? (float)( sd[seq].numframes - 1 ) : 0.0f;
+	// anything else that is held (drawing, a swing, reloading) shows the game's idle at once, so the weapon is in its
+	// place from the first frame: the one known from before, else the idle that looks like a dual one, else the first
+	if( slot >= 0 )
+		idle = known[slot].idle;
+
+	if( idle < 0 )
+	{
+		for( i = 0; i < hdr->numseq; i++ )
+		{
+			if( !VR_IsIdleLabel( sd[i].label ))
+				continue;
+
+			if( Q_stristr( sd[i].label, "test" ) || Q_stristr( sd[i].label, "dual" ) || Q_stristr( sd[i].label, "left" ))
+			{
+				idle = i;
+				break;
+			}
+
+			if( idle < 0 )
+				idle = i;
+		}
+	}
+
+	if( idle < 0 )
+		return;
+
+	e->curstate.sequence = idle;
+	e->curstate.frame = 0.0f;
 	e->curstate.framerate = 0.0f;
 }
 

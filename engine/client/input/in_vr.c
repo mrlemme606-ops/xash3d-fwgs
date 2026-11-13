@@ -121,7 +121,7 @@ static CVAR_DEFINE_AUTO( vr_move_digital, "0", FCVAR_ARCHIVE, "1 = the left stic
 static CVAR_DEFINE_AUTO( vr_use_aim, "2", FCVAR_ARCHIVE, "what the use key (right grip) aims along: 0 = your head, 1 = the exact point your hand ray hits, 2 = the direction your hand points" );
 static CVAR_DEFINE_AUTO( vr_melee_enable, "1", FCVAR_ARCHIVE, "1 = swinging your hand fast with a melee weapon attacks" );
 static CVAR_DEFINE_AUTO( vr_melee_speed, "3.5", FCVAR_ARCHIVE, "hand speed in m/s that counts as a swing" );
-static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.45", FCVAR_ARCHIVE, "seconds between two swings (a swing has to slow down before the next one counts anyway)" );
+static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.3", FCVAR_ARCHIVE, "seconds between two swings (a swing has to slow down before the next one counts anyway)" );
 static CVAR_DEFINE_AUTO( vr_key_swing, "mouse1", FCVAR_ARCHIVE, "key pressed when you swing a melee weapon" );
 static CVAR_DEFINE_AUTO( vr_key_whip, "mouse2", FCVAR_ARCHIVE, "key pressed when you swing a gun (pistol whip). empty = nothing" );
 static CVAR_DEFINE_AUTO( vr_key_reload, "r", FCVAR_ARCHIVE, "key pressed for you when a manual reload is finished (the game then does the actual reload)" );
@@ -713,7 +713,7 @@ static void IN_VRUpdateButtons( int buttons )
 
 			if( i == VRB_RSTICK && ( !ks[0] || !Q_strcmp( ks, "!special" )))
 				ks = "!weapontoggle";
-			if( i == VRB_Y && ( !ks[0] || !Q_strcmp( ks, "i" )))
+			if( i == VRB_Y && ( !ks[0] || !Q_strcmp( ks, "i" ) || !Q_stricmp( ks, "escape" )))
 			{
 				// our own pause menu; the Xash menu stays on the keyboard's escape
 				if( IN_VRMenuToggle( ))
@@ -895,8 +895,6 @@ static const vr_opt_t vr_opts[] =
 	{ "TURNING", "vr_turn_mode", 0, 2, 1, 1, { "SNAP", "SMOOTH", "OFF" } },
 	{ "SMOOTH TURN SPEED", "vr_smooth_speed", 30, 300, 15, 0, { NULL, NULL, NULL } },
 	{ "SNAP TURN ANGLE", "vr_snap_angle", 15, 90, 15, 0, { NULL, NULL, NULL } },
-	{ "WALK AROUND YOUR ROOM", "vr_roomscale", 0, 1, 1, 2, { NULL, NULL, NULL } },
-	{ "MELEE BY SWINGING", "vr_melee_enable", 0, 1, 1, 2, { NULL, NULL, NULL } },
 	{ "SOUND VOLUME", "volume", 0, 1, 0.1f, 3, { NULL, NULL, NULL } },
 	{ "MUSIC VOLUME", "MP3Volume", 0, 1, 0.1f, 3, { NULL, NULL, NULL } },
 	{ "BRIGHTNESS", "brightness", 0, 1, 0.1f, 3, { NULL, NULL, NULL } },
@@ -1065,6 +1063,15 @@ static void IN_VRMenuLayout( int n, int *x0, int *y0, int *rw, int *rh, int *gap
 	*y0 = h * 25 / 100;
 }
 
+// the - and + boxes at the right end of an option row: x of the minus box, of the plus box and their size
+static void IN_VRMenuButtons( int x0, int y, int rw, int rh, int *minus_x, int *plus_x, int *bs, int *by )
+{
+	*bs = rh * 80 / 100;
+	*by = y + ( rh - *bs ) / 2;
+	*plus_x = x0 + rw - rw / 40 - *bs;
+	*minus_x = *plus_x - *bs - rw * 22 / 100;
+}
+
 static int IN_VRMenuHit( int px, int py, const vr_mitem_t *items, int n, int *part )
 {
 	int x0, y0, rw, rh, gap, i;
@@ -1077,7 +1084,20 @@ static int IN_VRMenuHit( int px, int py, const vr_mitem_t *items, int n, int *pa
 
 		if( px >= x0 && px < x0 + rw && py >= y && py < y + rh )
 		{
-			*part = ( px - x0 ) * 100 / rw;
+			int mx, pxx, bs, by;
+
+			// an option row: only its - and + boxes act (0 = minus, 100 = plus, -1 = elsewhere on the row)
+			IN_VRMenuButtons( x0, y, rw, rh, &mx, &pxx, &bs, &by );
+			*part = -1;
+
+			if( items[i].value[0] )
+			{
+				if( px >= mx - bs / 4 && px < mx + bs + bs / 4 )
+					*part = 0;
+				else if( px >= pxx - bs / 4 && px < pxx + bs + bs / 4 )
+					*part = 100;
+			}
+
 			return i;
 		}
 	}
@@ -1131,11 +1151,17 @@ static void IN_VRMenuClick( void )
 	if( !id )
 		return;
 
-	S_StartLocalSound( "UI/3d_click.wav", VOL_NORM, false );
+	if( id < 100 || id >= 200 )
+		S_StartLocalSound( "UI/3d_click.wav", VOL_NORM, false );
 
 	if( id >= 100 && id < 200 )
 	{
-		IN_VRMenuChangeOption( &vr_opts[id - 100], part );
+		if( part >= 0 )
+		{
+			S_StartLocalSound( "UI/3d_click.wav", VOL_NORM, false );
+			IN_VRMenuChangeOption( &vr_opts[id - 100], part );
+		}
+
 		return;
 	}
 
@@ -1186,7 +1212,7 @@ static void IN_VRMenuClick( void )
 static void IN_VRMenuDraw( void )
 {
 	vr_mitem_t items[16];
-	int w = refState.width, h = refState.height, n, i, x0, y0, rw, rh, gap, px, py, part = 0, hit = -1;
+	int w = refState.width, h = refState.height, n, i, k, x0, y0, rw, rh, gap, px, py, part = 0, hit = -1;
 	static cl_font_t font;
 	rgba_t white = { 235, 235, 235, 255 }, orange = { 255, 190, 60, 255 };
 	const char *title;
@@ -1205,8 +1231,12 @@ static void IN_VRMenuDraw( void )
 
 	if( !font.valid && cls.creditsFont.rendermode )
 	{
-		if( !Con_LoadVariableWidthFont( "gfx/creditsfont.fnt", &font, 2.0f, cls.creditsFont.rendermode, TF_FONT ))
-			Con_LoadFixedWidthFont( "gfx/conchars", &font, 3.0f, cls.creditsFont.rendermode, TF_FONT | TF_NEAREST | TF_KEEP_SOURCE );
+		// gfx/vr/menufont.fnt (made by tools/make_menu_font.py from any TrueType font), else the game's credits font
+		if( !Con_LoadVariableWidthFont( "gfx/vr/menufont.fnt", &font, 1.35f, cls.creditsFont.rendermode, TF_FONT ))
+		{
+			if( !Con_LoadVariableWidthFont( "gfx/creditsfont.fnt", &font, 2.0f, cls.creditsFont.rendermode, TF_FONT ))
+				Con_LoadFixedWidthFont( "gfx/conchars", &font, 3.0f, cls.creditsFont.rendermode, TF_FONT | TF_NEAREST | TF_KEEP_SOURCE );
+		}
 	}
 
 	f = font.valid ? &font : &cls.creditsFont;
@@ -1250,7 +1280,7 @@ static void IN_VRMenuDraw( void )
 
 	title = ( vr_menu_page == 2 ) ? "OPTIONS" : ( vr_menu_page == 3 ? "LOAD GAME" : "PAUSED" );
 	CL_DrawStringLen( f, title, &lw, &lh, 0 );
-	CL_DrawString(( w - lw ) / 2, h * 13 / 100, title, white, f, FONT_DRAW_NORENDERMODE );
+	CL_DrawString(( w - lw ) / 2, h * 13 / 100, title, white, f, 0 );
 
 	for( i = 0; i < n; i++ )
 	{
@@ -1262,13 +1292,31 @@ static void IN_VRMenuDraw( void )
 		ref.dllFuncs.FillRGBA( kRenderTransTexture, x0, y, rw, rh, over ? 90 : 15, over ? 60 : 15, over ? 15 : 15, over ? 225 : 190 );
 
 		CL_DrawStringLen( f, items[i].text, &tw, &th, 0 );
-		CL_DrawString( x0 + pad, y + ( rh - th ) / 2, items[i].text, col, f, FONT_DRAW_NORENDERMODE );
+		CL_DrawString( x0 + pad, y + ( rh - th ) / 2, items[i].text, col, f, 0 );
 
 		if( items[i].value[0] )
 		{
-			Q_snprintf( value, sizeof( value ), "<  %s  >", items[i].value );
-			CL_DrawStringLen( f, value, &vw, &vh, 0 );
-			CL_DrawString( x0 + rw - pad - vw, y + ( rh - vh ) / 2, value, col, f, FONT_DRAW_NORENDERMODE );
+			int mx, pxx, bs, by, bar;
+
+			IN_VRMenuButtons( x0, y, rw, rh, &mx, &pxx, &bs, &by );
+			bar = Q_max( bs / 8, 3 );
+
+			// the value, centred between the two boxes
+			CL_DrawStringLen( f, items[i].value, &vw, &vh, 0 );
+			CL_DrawString( mx + bs + (( pxx - mx - bs ) - vw ) / 2, y + ( rh - vh ) / 2, items[i].value, col, f, 0 );
+
+			// - and + : boxes with a bar (and a second one for the plus) so they are big and easy to hit
+			for( k = 0; k < 2; k++ )
+			{
+				int bx = ( k == 0 ) ? mx : pxx;
+				int lit = over && (( k == 0 && part == 0 ) || ( k == 1 && part == 100 ));
+
+				ref.dllFuncs.FillRGBA( kRenderTransTexture, bx, by, bs, bs, lit ? 150 : 60, lit ? 100 : 60, lit ? 25 : 60, 235 );
+				ref.dllFuncs.FillRGBA( kRenderTransTexture, bx + bs / 5, by + bs / 2 - bar / 2, bs * 3 / 5, bar, 245, 245, 245, 255 );
+
+				if( k == 1 )
+					ref.dllFuncs.FillRGBA( kRenderTransTexture, bx + bs / 2 - bar / 2, by + bs / 5, bar, bs * 3 / 5, 245, 245, 245, 255 );
+			}
 		}
 	}
 
