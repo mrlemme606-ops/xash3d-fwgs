@@ -230,6 +230,8 @@ static CVAR_DEFINE_AUTO( vr_dual_debug, "0", 0, "1 = print once a second whether
 static CVAR_DEFINE_AUTO( vr_dual_cut, "6", FCVAR_ARCHIVE, "where the arm of the left hand weapon is cut off, in units behind the hand (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: pitch degrees (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: yaw degrees (saved with vr_weapon_save_left)" );
+static CVAR_DEFINE_AUTO( vr_cut_follow, "1", FCVAR_ARCHIVE, "1 = the cut of the arm follows the wrist of the weapon model through its animations (shotgun slide, reloading); 0 = fixed to the controller" );
+static CVAR_DEFINE_AUTO( vr_cut_bone, "r_hand+r_wrist", FCVAR_ARCHIVE, "bone of the weapon model (part of the name, separated by +) the arm cut follows. vr_vm_dump_tex 2 lists the bones" );
 static CVAR_DEFINE_AUTO( vr_dual_clip_all, "1", FCVAR_ARCHIVE, "1 = the left weapon of a dual wield is cut behind the wrist with vr_dual_cut (it is drawn by the game, so this cuts everything behind the plane)" );
 static CVAR_DEFINE_AUTO( vr_dual_clip_tex, "", FCVAR_ARCHIVE, "extra texture name fragments of the left weapon's arm that are cut off behind the wrist (separate with +). vr_vm_dump_tex 1 lists the textures" );
 static CVAR_DEFINE_AUTO( vr_dual_anim_hold, "idle+draw+holster+equip+deploy+reload+pull+hide+show+inspect+fidget+lean+sprint+walk+run", FCVAR_ARCHIVE, "animation names (part of the name, separated by +) that a gun on the left hand does NOT play" );
@@ -462,6 +464,8 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_debug );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_clip_tex );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_clip_all );
+	gEngfuncs.Cvar_RegisterVariable( &vr_cut_follow );
+	gEngfuncs.Cvar_RegisterVariable( &vr_cut_bone );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_own );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_anim_play );
@@ -648,6 +652,32 @@ static void VR_Init( void )
 	gEngfuncs.Cvar_SetValue( "cl_bob", 0.0f );
 	gEngfuncs.Con_Printf( "VR: SteamVR initialized. Eye FOV tangents L: %.2f %.2f %.2f %.2f\n",
 		vr.tan_frustum[0][0], vr.tan_frustum[0][1], vr.tan_frustum[0][2], vr.tan_frustum[0][3] );
+}
+
+// A frame without a 3D picture (the intro videos, the Xash menu, loading): start SteamVR now if it is not running yet, so the
+// floating panel with the window can be shown, and keep the headset's poses coming. Returns true for such a frame.
+qboolean VR_NoScenePrepare( void )
+{
+	static qboolean early_tried;
+
+	if( !vr_enable.value )
+		return false;
+
+	// one try only. If SteamVR is not up yet this must not give VR up for good: the start at the first map tries again
+	if( !vr.initialized && !vr.failed && !early_tried )
+	{
+		early_tried = true;
+		VR_Init();
+
+		if( !vr.initialized )
+			vr.failed = false;
+	}
+
+	if( !vr.initialized || vr.frame_done )
+		return false;
+
+	vr.compositor->WaitGetPoses( vr.poses, VR_MAX_DEVICES, NULL, 0 );
+	return true;
 }
 
 void VR_NewFrame( void )
@@ -1076,6 +1106,15 @@ static void VR_PublishAim( const ref_viewpass_t *game )
 		VR_AimAngles( vec3_origin, vr.hand[1].fwd, game->viewangles[YAW], &dpitch, &dyaw );
 		gEngfuncs.Cvar_SetValue( "vr_in_dir_pitch", dpitch );
 		gEngfuncs.Cvar_SetValue( "vr_in_dir_yaw", dyaw );
+	}
+
+	// where the left hand (the wand) points, always: the left stick can walk along it
+	if( vr.hand[0].valid )
+	{
+		float wpitch, wyaw;
+
+		VR_AimAngles( vec3_origin, vr.hand[0].fwd, game->viewangles[YAW], &wpitch, &wyaw );
+		gEngfuncs.Cvar_SetValue( "vr_in_wand_yaw", wyaw );
 	}
 
 	// for the flashlight, which lives in the engine
@@ -1589,6 +1628,31 @@ int VR_ViewModelMeshMode( int mesh, const char *texname )
 }
 
 // everything in front of a plane just behind the hand is drawn, the arm behind it is cut off
+// where the wrist of the weapon model is this frame, and which way the arm runs (from the elbow to the wrist)
+static qboolean vr_follow_valid;
+static vec3_t vr_follow_pt, vr_follow_dir;
+
+qboolean VR_CutFollowWanted( void )
+{
+	return vr_cut_follow.value != 0.0f;
+}
+
+qboolean VR_CutBoneMatch( const char *bonename )
+{
+	return VR_ListMatches( vr_cut_bone.string, bonename, true );
+}
+
+void VR_ViewModelCutFollow( qboolean valid, const vec3_t wrist, const vec3_t dir )
+{
+	vr_follow_valid = valid;
+
+	if( valid )
+	{
+		VectorCopy( wrist, vr_follow_pt );
+		VectorCopy( dir, vr_follow_dir );
+	}
+}
+
 void VR_ViewModelClip( qboolean on )
 {
 	GLdouble eq[4];
@@ -1612,6 +1676,14 @@ void VR_ViewModelClip( qboolean on )
 	VectorScale( t, cos( cp ), n );
 	VectorMA( n, sin( cp ), vr.hand[hnd].up, n );
 	VectorMA( vr.hand[hnd].pos, -cut, n, c );
+
+	// the right hand's weapon: the plane sits on the animated wrist and runs along the arm, so the cut stays at the
+	// same place of the arm whatever the animation does (the controller does not move with the slide of a shotgun)
+	if( !vr_dual_pass && !vr_left_pass && vr_follow_valid && vr_cut_follow.value != 0.0f )
+	{
+		VectorCopy( vr_follow_dir, n );
+		VectorMA( vr_follow_pt, -cut, n, c );
+	}
 
 	eq[0] = n[0];
 	eq[1] = n[1];
@@ -1957,7 +2029,7 @@ static const char *vr_builtin_profiles[][2] =
 {
 	{ "v_actions", "vr_vm_grip_x -12\nvr_vm_grip_y -20\nvr_vm_grip_z -11\nvr_vm_pitch -70\nvr_vm_yaw 80\nvr_vm_roll -10\nvr_vm_flip_roll 0\nvr_vm_scale 0.19\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_branch", "vr_vm_grip_x 13\nvr_vm_grip_y -6.5\nvr_vm_grip_z -8\nvr_vm_pitch 7\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 0.18\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0\nvr_scope_y 0\nvr_scope_z 3\nvr_scope_radius 1.2\nvr_scope_fov 10\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
-	{ "v_camera", "vr_vm_grip_x 10\nvr_vm_grip_y -5\nvr_vm_grip_z -3\nvr_vm_pitch 60\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_aim_pitch 70\nvr_vm_scale 0.02\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_rl_grip_radius 10\nvr_rl_grip_x 12\nvr_rl_grip_y 0\nvr_rl_grip_z -4\n\nvr_anim_mask 8" },
+	{ "v_camera", "vr_vm_grip_x 10\nvr_vm_grip_y -5\nvr_vm_grip_z -3\nvr_vm_pitch 60\nvr_vm_yaw 0\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_aim_pitch 70\nvr_vm_scale 0.02\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_rl_grip_radius 10\nvr_rl_grip_x 12\nvr_rl_grip_y 0\nvr_rl_grip_z -4\n\nvr_anim_mask 8\n" },
 	{ "v_flare", "vr_vm_grip_x 12\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 0\nvr_vm_yaw 10\nvr_vm_roll 60\nvr_vm_flip_roll 0\nvr_vm_scale 0.5\nvr_hand_pitch 60\nvr_vm_arm_cut 7\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_muzzle_x -4\nvr_muzzle_y 2\nvr_muzzle_z -12\n" },
 	{ "v_flashlight", "vr_vm_grip_x 8\nvr_vm_grip_y -4\nvr_vm_grip_z -5\nvr_vm_pitch 100\nvr_vm_yaw 0\nvr_vm_roll 70\nvr_vm_flip_roll 0\nvr_vm_scale 1.2\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 100\nvr_light_yaw 0\nvr_vm_mirror -1\n" },
 	{ "v_g43", "vr_vm_grip_x 4\nvr_vm_grip_y -1.5\nvr_vm_grip_z -2\nvr_vm_pitch 0\nvr_vm_yaw 2.3\nvr_vm_roll 0\nvr_vm_flip_roll 0\nvr_vm_scale 0.45\nvr_hand_pitch 60\nvr_vm_arm_cut 6\nvr_vm_cut_pitch 0\nvr_vm_cut_yaw 0\nvr_light_x 6\nvr_light_y 0\nvr_light_z 0\nvr_scope_x 0.4\nvr_scope_y -0.3\nvr_scope_z 2.5\nvr_scope_radius 0.4\nvr_scope_fov 2\nvr_light_pitch 0\nvr_light_yaw 0\nvr_vm_mirror -1\nvr_rl_grip_radius 8\nvr_rl_grip_x 16\nvr_rl_grip_y 0\nvr_rl_grip_z 0\n" },
@@ -2264,6 +2336,11 @@ static void VR_PublishDual( const ref_viewpass_t *game )
 			VR_AimAngles( eye, target, game->viewangles[YAW], &p, &y );
 			gEngfuncs.Cvar_SetValue( "vr_in_lhand_pitch", p );
 			gEngfuncs.Cvar_SetValue( "vr_in_lhand_yaw", y );
+
+			// about where the left weapon's muzzle is (the engine makes its muzzle flash there)
+			gEngfuncs.Cvar_SetValue( "vr_in_lmuz_x", vr.hand[0].pos[0] + vr.hand[0].fwd[0] * 12.0f );
+			gEngfuncs.Cvar_SetValue( "vr_in_lmuz_y", vr.hand[0].pos[1] + vr.hand[0].fwd[1] * 12.0f );
+			gEngfuncs.Cvar_SetValue( "vr_in_lmuz_z", vr.hand[0].pos[2] + vr.hand[0].fwd[2] * 12.0f );
 		}
 	}
 	else

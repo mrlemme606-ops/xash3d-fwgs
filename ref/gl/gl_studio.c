@@ -2168,6 +2168,41 @@ static void R_StudioDrawPoints( void )
 		for( int b = 0; b < nb; b++ )
 			bonehide[b] = VR_ViewModelBoneHidden( vrbones[b].name );
 
+		// the arm cut follows the animated wrist of the right hand's weapon
+		if( RI.currententity == tr.viewent && VR_CutFollowWanted( ))
+		{
+			int wrist = -1;
+
+			for( int b = 0; b < nb; b++ )
+			{
+				if( VR_CutBoneMatch( vrbones[b].name ))
+				{
+					wrist = b;
+					break;
+				}
+			}
+
+			if( wrist >= 0 && vrbones[wrist].parent >= 0 && vrbones[wrist].parent < nb )
+			{
+				vec3_t w, p, d;
+				float len;
+
+				VectorSet( w, g_studio.bonestransform[wrist][0][3], g_studio.bonestransform[wrist][1][3], g_studio.bonestransform[wrist][2][3] );
+				VectorSet( p, g_studio.bonestransform[vrbones[wrist].parent][0][3], g_studio.bonestransform[vrbones[wrist].parent][1][3], g_studio.bonestransform[vrbones[wrist].parent][2][3] );
+				VectorSubtract( w, p, d );
+				len = VectorLength( d );
+
+				if( len > 0.05f )
+				{
+					VectorScale( d, 1.0f / len, d );
+					VR_ViewModelCutFollow( true, w, d );
+				}
+				else VR_ViewModelCutFollow( false, w, d );
+			}
+			else VR_ViewModelCutFollow( false, vec3_origin, vec3_origin );
+		}
+		else VR_ViewModelCutFollow( false, vec3_origin, vec3_origin );
+
 		// vr_vm_center: the middle of the weapon (not the arms)
 		if( RI.currententity == tr.viewent && VR_CenterWanted( ))
 		{

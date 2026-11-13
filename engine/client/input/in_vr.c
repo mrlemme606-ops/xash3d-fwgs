@@ -108,6 +108,11 @@ static CVAR_DEFINE_AUTO( vr_in_reload, "0", 0, "(internal) the reload system fin
 // settings
 static CVAR_DEFINE_AUTO( vr_turn_mode, "1", FCVAR_ARCHIVE, "0 = snap turn, 1 = smooth turn, 2 = no turning" );
 static CVAR_DEFINE_AUTO( vr_move_ref, "0", FCVAR_ARCHIVE, "what the left stick walks along: 0 = where your head looks, 1 = where your left hand points" );
+static CVAR_DEFINE_AUTO( vr_in_wand_yaw, "0", 0, "(internal) yaw the left hand points, relative to the body" );
+static CVAR_DEFINE_AUTO( vr_in_lmuz_x, "0", 0, "(internal) left muzzle position" );
+static CVAR_DEFINE_AUTO( vr_in_lmuz_y, "0", 0, "(internal) left muzzle position" );
+static CVAR_DEFINE_AUTO( vr_in_lmuz_z, "0", 0, "(internal) left muzzle position" );
+static CVAR_DEFINE_AUTO( vr_menu_version, "0", FCVAR_ARCHIVE, "(internal) settings of the VR menu that were set once" );
 static CVAR_DEFINE_AUTO( vr_menu_debug, "0", 0, "1 = print every command the game sends (helps find the button of the game's own main menu that opens the options)" );
 static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in degrees" );
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
@@ -640,6 +645,11 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_turn_mode );
 	Cvar_RegisterVariable( &vr_move_ref );
 	Cvar_RegisterVariable( &vr_menu_debug );
+	Cvar_RegisterVariable( &vr_in_wand_yaw );
+	Cvar_RegisterVariable( &vr_in_lmuz_x );
+	Cvar_RegisterVariable( &vr_in_lmuz_y );
+	Cvar_RegisterVariable( &vr_in_lmuz_z );
+	Cvar_RegisterVariable( &vr_menu_version );
 	Cvar_RegisterVariable( &vr_snap_angle );
 	Cvar_RegisterVariable( &vr_smooth_speed );
 	Cvar_RegisterVariable( &vr_aim_mode );
@@ -703,6 +713,22 @@ static void IN_VRUpdateButtons( int buttons )
 				// seen in the game: while dual wielding mouse 1 fires the weapon the game draws on the LEFT and mouse 2 the one
 				// on the right, so each trigger sends the key of the weapon in its own hand
 				ks = "mouse1";
+
+				// the game draws no muzzle flash for this weapon, so it gets one here
+				{
+					vec3_t pos = { vr_in_lmuz_x.value, vr_in_lmuz_y.value, vr_in_lmuz_z.value };
+					dlight_t *dl;
+
+					R_MuzzleFlash( pos, 21 );
+					dl = CL_AllocDlight( 0 );
+					VectorCopy( pos, dl->origin );
+					dl->radius = 140;
+					dl->color.r = 255;
+					dl->color.g = 200;
+					dl->color.b = 110;
+					dl->die = cl.time + 0.03f;
+					dl->decay = 800;
+				}
 			}
 			else if( i == VRB_RTRIGGER && vr_in_dual.value > 0.5f && cls.key_dest == key_game && vr_in_menu.value < 0.5f )
 				ks = "mouse2";
@@ -868,6 +894,10 @@ static void IN_VRMoveCursor( void )
 		y = vr_cur_lock_y;
 	}
 
+	// our own menu over the running game: the OS cursor stays, or the game would turn with it
+	if( vr_menu_page && cls.key_dest == key_game && !host.mouse_visible )
+		return;
+
 	// the real cursor first (client code that reads the OS cursor), then the exact position for the UI,
 	// so a window larger than the desktop can't clamp where the laser points
 	Platform_SetMousePos( x, y );
@@ -891,7 +921,7 @@ typedef struct
 
 static const vr_opt_t vr_opts[] =
 {
-	{ "MOVEMENT DIRECTION", "vr_move_ref", 0, 1, 1, 1, { "HEAD", "LEFT HAND", NULL } },
+	{ "MOVEMENT DIRECTION", "vr_move_ref", 0, 1, 1, 1, { "HEAD", "WAND", NULL } },
 	{ "TURNING", "vr_turn_mode", 0, 2, 1, 1, { "SNAP", "SMOOTH", "OFF" } },
 	{ "SMOOTH TURN SPEED", "vr_smooth_speed", 30, 300, 15, 0, { NULL, NULL, NULL } },
 	{ "SNAP TURN ANGLE", "vr_snap_angle", 15, 90, 15, 0, { NULL, NULL, NULL } },
@@ -909,6 +939,35 @@ typedef struct
 	int id;
 } vr_mitem_t;
 
+// the names Cry of Fear gives its saves ("Storage Tunnel - Mon Nov 9 01:04:04 2026"): the first line of save/saveinfoN.cof
+static char vr_menu_saveinfo[5][48];
+
+static void IN_VRMenuLoadSaveInfo( void )
+{
+	int i;
+
+	for( i = 0; i < 5; i++ )
+	{
+		fs_offset_t len = 0;
+		byte *buf = FS_LoadFile( va( "save/saveinfo%d.cof", i + 1 ), &len, false );
+		int n = 0;
+
+		vr_menu_saveinfo[i][0] = 0;
+
+		if( !buf )
+			continue;
+
+		while( n < (int)len && n < (int)sizeof( vr_menu_saveinfo[i] ) - 1 && buf[n] != '\r' && buf[n] != '\n' )
+		{
+			vr_menu_saveinfo[i][n] = buf[n];
+			n++;
+		}
+
+		vr_menu_saveinfo[i][n] = 0;
+		Mem_Free( buf );
+	}
+}
+
 static int vr_menu_hover = -1, vr_menu_confirm = -1, vr_menu_bgtex = -2, vr_menu_from;
 static qboolean vr_menu_we_paused;
 
@@ -916,7 +975,7 @@ static void IN_VRMenuOpen( int page )
 {
 	if( !vr_menu_page && cls.state == ca_active && !cl.paused && !Q_stristr( clgame.mapname, "c_game_menu" ))
 	{
-		Cbuf_AddText( "pause\\n" );
+		Cbuf_AddText( "pause\n" );
 		vr_menu_we_paused = true;
 	}
 
@@ -929,7 +988,7 @@ static void IN_VRMenuOpen( int page )
 static void IN_VRMenuClose( void )
 {
 	if( vr_menu_we_paused && cls.state == ca_active )
-		Cbuf_AddText( "pause\\n" );
+		Cbuf_AddText( "pause\n" );
 
 	vr_menu_we_paused = false;
 	vr_menu_page = 0;
@@ -1025,7 +1084,9 @@ static int IN_VRMenuItems( vr_mitem_t *items )
 			if( !FS_FileExists( va( "save/%s.sav", vr_menu_saves[i] ), true ))
 				continue;
 
-			if( i < 5 )
+			if( i < 5 && vr_menu_saveinfo[i][0] )
+				Q_strncpy( items[n].text, vr_menu_saveinfo[i], sizeof( items[n].text ));
+			else if( i < 5 )
 				Q_snprintf( items[n].text, sizeof( items[n].text ), "SAVE %d", i + 1 );
 			else
 				Q_strncpy( items[n].text, i == 5 ? "AUTOSAVE" : "QUICKSAVE", sizeof( items[n].text ));
@@ -1167,7 +1228,7 @@ static void IN_VRMenuClick( void )
 
 	if( id >= 200 )
 	{
-		Cbuf_AddText( va( "load %s\\n", vr_menu_saves[id - 200] ));
+		Cbuf_AddText( va( "load %s\n", vr_menu_saves[id - 200] ));
 		IN_VRMenuClose( );
 		return;
 	}
@@ -1186,6 +1247,7 @@ static void IN_VRMenuClick( void )
 		IN_VRMenuClose( );
 		break;
 	case 2:
+		IN_VRMenuLoadSaveInfo( );
 		vr_menu_page = 3;
 		break;
 	case 3:
@@ -1193,10 +1255,10 @@ static void IN_VRMenuClick( void )
 		break;
 	case 4:
 		IN_VRMenuClose( );
-		Cbuf_AddText( "map c_game_menu1\\n" );
+		Cbuf_AddText( "map c_game_menu1\n" );
 		break;
 	case 5:
-		Cbuf_AddText( "quit\\n" );
+		Cbuf_AddText( "quit\n" );
 		break;
 	case VM_ID_BACK:
 		// the options of the game's own main menu go straight away, the rest goes back to the pause menu
@@ -1328,6 +1390,20 @@ static void IN_VRMenuDraw( void )
 // menu wants the cursor and moves it where the right hand points
 void IN_VRMenuFrame( void )
 {
+	static qboolean migrated;
+
+	// the config has been read by now: everyone starts with smooth turning once; after that the menu is in charge
+	if( !migrated )
+	{
+		migrated = true;
+
+		if( vr_menu_version.value < 1.0f )
+		{
+			Cvar_DirectSetValue( &vr_turn_mode, 1.0f );
+			Cvar_DirectSetValue( &vr_menu_version, 1.0f );
+		}
+	}
+
 	float menu = ( cls.key_dest != key_game || host.mouse_visible || vr_menu_page ) ? 1.0f : 0.0f;
 
 	if( vr_in_menu.value != menu )
@@ -1630,7 +1706,7 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 	}
 
 	// the stick means "walk where I look". the game walks along its aim, so rotate the stick by the difference
-	rot = (( vr_move_ref.value >= 0.5f ) ? vr_in_lhand_yaw.value : head_rel ) - aim_rel;
+	rot = (( vr_move_ref.value >= 0.5f ) ? vr_in_wand_yaw.value : head_rel ) - aim_rel;
 	{
 		float a = DEG2RAD( rot );
 		float c = cos( a ), s = sin( a );

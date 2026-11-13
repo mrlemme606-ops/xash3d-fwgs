@@ -42,6 +42,7 @@ static CVAR_DEFINE_AUTO( vr_cof_eyeangles, "1", FCVAR_ARCHIVE, "1 = give the cli
 static CVAR_DEFINE_AUTO( vr_cof_eyeorigin, "1", FCVAR_ARCHIVE, "1 = centre the client.dll sky on the eye being drawn instead of the game's view origin" );
 static CVAR_DEFINE_AUTO( vr_cof_depth, "0.8", 0, "far end of the depth range the world is drawn in while the game's client.dll is attached (it keeps 0.8 to 1.0 for its sky). 1 = off" );
 static CVAR_DEFINE_AUTO( vr_cof_watersize, "1", FCVAR_ARCHIVE, "1 = tell the game's water effect the size of the eye picture (it copies the screen from the bottom left corner at the window size). Experimental" );
+static CVAR_DEFINE_AUTO( vr_dual_idles, "v_p345=idletest+v_glock=idle1", FCVAR_ARCHIVE, "the idle animation the game uses for each weapon in the left hand (learned while you play): weapon=animation+weapon=animation" );
 static CVAR_DEFINE_AUTO( vr_cof_watercomp, "1", FCVAR_ARCHIVE, "the game's own water reflection is a copy of the picture shifted 'up' on the screen. 1 = shift towards the real up of the world (stable when you tilt your head), -1 = the other way round, 0 = shift along the screen like the flat game" );
 static CVAR_DEFINE_AUTO( vr_cof_waterscale, "0.5", FCVAR_ARCHIVE, "how far the game's water reflection is shifted (1 = like the flat game)" );
 static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepass while the client.dll re-arm is working (normally not needed)" );
@@ -747,6 +748,86 @@ qboolean VR_CofSlotName( int slot, char *out, size_t size )
 
 // only shooting plays on the left weapon of a dual wield. Idle, draw, melee, reload hold the first idle pose.
 // (The weapon is a plain cl_entity_t inside client.dll, so its animation can be set right here before it is drawn.)
+// "v_glock" from "models/weapons/glock/v_glock.mdl"
+static void COF_ModelKey( const char *name, char *out, size_t size )
+{
+	const char *p = name, *q;
+	char *dot;
+
+	for( q = name; *q; q++ )
+		if( *q == '/' || *q == '\\' ) p = q + 1;
+
+	Q_strncpy( out, p, size );
+	dot = Q_strrchr( out, '.' );
+
+	if( dot ) *dot = 0;
+}
+
+// the remembered idle label of a weapon, or false
+static qboolean COF_IdleLookup( const char *key, char *label, size_t size )
+{
+	const char *p = vr_dual_idles.string;
+	size_t klen = Q_strlen( key );
+
+	while( *p )
+	{
+		const char *end = Q_strchr( p, '+' );
+		size_t len = end ? (size_t)( end - p ) : Q_strlen( p );
+
+		if( len > klen + 1 && !Q_strnicmp( p, key, klen ) && p[klen] == '=' )
+		{
+			size_t n = Q_min( len - klen - 1, size - 1 );
+
+			memcpy( label, p + klen + 1, n );
+			label[n] = 0;
+			return true;
+		}
+
+		if( !end ) break;
+		p = end + 1;
+	}
+
+	return false;
+}
+
+static void COF_IdleRemember( const char *key, const char *label )
+{
+	char old[40], out[256], tok[96];
+	const char *p = vr_dual_idles.string;
+
+	if( COF_IdleLookup( key, old, sizeof( old )) && !Q_stricmp( old, label ))
+		return;
+
+	out[0] = 0;
+
+	// the other weapons stay
+	while( *p )
+	{
+		const char *end = Q_strchr( p, '+' );
+		size_t len = end ? (size_t)( end - p ) : Q_strlen( p );
+		size_t klen = Q_strlen( key );
+
+		if( len && !( len > klen && !Q_strnicmp( p, key, klen ) && p[klen] == '=' ) && Q_strlen( out ) + len + 2 < sizeof( out ))
+		{
+			if( out[0] ) Q_strncat( out, "+", sizeof( out ));
+			Q_strncpy( tok, p, Q_min( len + 1, sizeof( tok )));
+			Q_strncat( out, tok, sizeof( out ));
+		}
+
+		if( !end ) break;
+		p = end + 1;
+	}
+
+	if( Q_strlen( out ) + Q_strlen( key ) + Q_strlen( label ) + 3 < sizeof( out ))
+	{
+		if( out[0] ) Q_strncat( out, "+", sizeof( out ));
+		Q_strncat( out, key, sizeof( out ));
+		Q_strncat( out, "=", sizeof( out ));
+		Q_strncat( out, label, sizeof( out ));
+		gEngfuncs.Cvar_Set( "vr_dual_idles", out );
+	}
+}
+
 static void COF_FreezeDualAnim( cl_entity_t *e )
 {
 	// the idle the game itself uses for the left weapon, remembered per model
@@ -794,6 +875,14 @@ static void COF_FreezeDualAnim( cl_entity_t *e )
 			known[slot].model = e->model;
 		}
 
+		if( known[slot].idle != seq )
+		{
+			char key[48];
+
+			COF_ModelKey( e->model->name, key, sizeof( key ));
+			COF_IdleRemember( key, sd[seq].label );
+		}
+
 		known[slot].idle = seq;
 		e->curstate.frame = 0.0f;
 		e->curstate.framerate = 0.0f;
@@ -804,6 +893,26 @@ static void COF_FreezeDualAnim( cl_entity_t *e )
 	// place from the first frame: the one known from before, else the idle that looks like a dual one, else the first
 	if( slot >= 0 )
 		idle = known[slot].idle;
+
+	// remembered from an earlier session
+	if( idle < 0 )
+	{
+		char key[48], label[40];
+
+		COF_ModelKey( e->model->name, key, sizeof( key ));
+
+		if( COF_IdleLookup( key, label, sizeof( label )))
+		{
+			for( i = 0; i < hdr->numseq; i++ )
+			{
+				if( !Q_stricmp( sd[i].label, label ))
+				{
+					idle = i;
+					break;
+				}
+			}
+		}
+	}
 
 	if( idle < 0 )
 	{
@@ -893,6 +1002,7 @@ void VR_CofInitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_eyeangles );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_prepass );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_watersize );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_idles );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_watercomp );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_waterscale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_depth );

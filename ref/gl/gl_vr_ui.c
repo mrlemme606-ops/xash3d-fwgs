@@ -609,6 +609,37 @@ void VR_UIUpdate( void )
 	float fx, fz, len, head_yaw, diff, dist, zx, zz, pw, ph;
 	int w = gpGlobals->width, h = gpGlobals->height;
 
+	// no 3D picture this frame (the intro videos, the Xash menu, loading): the panel with the window is all there is,
+	// and SteamVR's own environment is faded to black behind it
+	{
+		static struct VR_IVRCompositor_FnTable *comp;
+		static qboolean tried, faded;
+		qboolean noscene = VR_NoScenePrepare();
+
+		if( !tried && VR_IsActive( ))
+		{
+			char cname[64];
+
+			tried = true;
+			Q_snprintf( cname, sizeof( cname ), "FnTable:%s", IVRCompositor_Version );
+			comp = (struct VR_IVRCompositor_FnTable *)VR_GetInterface( cname );
+		}
+
+		if( comp )
+		{
+			if( noscene && !faded )
+			{
+				comp->FadeToColor( 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, true );
+				faded = true;
+			}
+			else if( !noscene && faded )
+			{
+				comp->FadeToColor( 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, true );
+				faded = false;
+			}
+		}
+	}
+
 	if( ui.failed || !VR_IsActive( ))
 		return;
 
