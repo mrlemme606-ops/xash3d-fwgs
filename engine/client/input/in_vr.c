@@ -113,6 +113,7 @@ static CVAR_DEFINE_AUTO( vr_in_lmuz_x, "0", 0, "(internal) left muzzle position"
 static CVAR_DEFINE_AUTO( vr_in_lmuz_y, "0", 0, "(internal) left muzzle position" );
 static CVAR_DEFINE_AUTO( vr_in_lmuz_z, "0", 0, "(internal) left muzzle position" );
 static CVAR_DEFINE_AUTO( vr_menu_version, "0", FCVAR_ARCHIVE, "(internal) settings of the VR menu that were set once" );
+static CVAR_DEFINE_AUTO( vr_move_keys, "1", FCVAR_ARCHIVE, "1 = the left stick also presses the walking keys (like the keyboard), 0 = only the analog walking command. Try 0 if walking in circles lags" );
 static CVAR_DEFINE_AUTO( vr_menu_debug, "0", 0, "1 = print every command the game sends (helps find the button of the game's own main menu that opens the options)" );
 static CVAR_DEFINE_AUTO( vr_snap_angle, "30", FCVAR_ARCHIVE, "snap turn angle in degrees" );
 static CVAR_DEFINE_AUTO( vr_smooth_speed, "120", FCVAR_ARCHIVE, "smooth turn speed in degrees per second" );
@@ -123,7 +124,7 @@ static CVAR_DEFINE_AUTO( vr_move_cmd, "1000", FCVAR_ARCHIVE, "walking command a 
 static CVAR_DEFINE_AUTO( vr_move_deadzone, "0.12", FCVAR_ARCHIVE, "left stick dead zone for walking (0..1)" );
 static CVAR_DEFINE_AUTO( vr_move_full, "0.95", FCVAR_ARCHIVE, "stick deflection that counts as full speed (0..1)" );
 static CVAR_DEFINE_AUTO( vr_move_digital, "0", FCVAR_ARCHIVE, "1 = the left stick presses your movement keys (needed on ladders), 0 = analog speed only" );
-static CVAR_DEFINE_AUTO( vr_use_aim, "2", FCVAR_ARCHIVE, "what the use key (right grip) aims along: 0 = your head, 1 = the exact point your hand ray hits, 2 = the direction your hand points" );
+static CVAR_DEFINE_AUTO( vr_use_aim, "1", FCVAR_ARCHIVE, "what the use key (right grip) aims along: 0 = your head, 1 = the exact point your hand ray hits, 2 = the direction your hand points" );
 static CVAR_DEFINE_AUTO( vr_melee_enable, "1", FCVAR_ARCHIVE, "1 = swinging your hand fast with a melee weapon attacks" );
 static CVAR_DEFINE_AUTO( vr_melee_speed, "3.5", FCVAR_ARCHIVE, "hand speed in m/s that counts as a swing" );
 static CVAR_DEFINE_AUTO( vr_melee_cooldown, "0.3", FCVAR_ARCHIVE, "seconds between two swings (a swing has to slow down before the next one counts anyway)" );
@@ -264,7 +265,7 @@ typedef struct { const char *label; int ch; } vr_key_t;
 static const vr_key_t vr_kbd_keys[4][11] =
 {
 	{ {"1",'1'},{"2",'2'},{"3",'3'},{"4",'4'},{"5",'5'},{"6",'6'},{"7",'7'},{"8",'8'},{"9",'9'},{"0",'0'},{"<-",'\b'} },
-	{ {"q",'q'},{"w",'w'},{"e",'e'},{"r",'r'},{"t",'t'},{"y",'y'},{"u",'u'},{"i",'i'},{"o",'o'},{"p",'p'},{"OK",'\n'} },
+	{ {"q",'q'},{"w",'w'},{"e",'e'},{"r",'r'},{"t",'t'},{"y",'y'},{"u",'u'},{"i",'i'},{"o",'o'},{"p",'p'},{NULL,0} },
 	{ {"a",'a'},{"s",'s'},{"d",'d'},{"f",'f'},{"g",'g'},{"h",'h'},{"j",'j'},{"k",'k'},{"l",'l'},{NULL,0},{NULL,0} },
 	{ {"z",'z'},{"x",'x'},{"c",'c'},{"v",'v'},{"b",'b'},{"n",'n'},{"m",'m'},{"_",' '},{NULL,0},{NULL,0},{NULL,0} }
 };
@@ -356,8 +357,11 @@ void IN_VRDrawKeyboard( void )
 	// the letters get a font of their own, three times the size
 	if( !kbd_font.valid && cls.creditsFont.rendermode )
 	{
-		if( !Con_LoadVariableWidthFont( "gfx/creditsfont.fnt", &kbd_font, 3.0f, cls.creditsFont.rendermode, TF_FONT ))
-			Con_LoadFixedWidthFont( "gfx/conchars", &kbd_font, 4.0f, cls.creditsFont.rendermode, TF_FONT | TF_NEAREST | TF_KEEP_SOURCE );
+		if( !Con_LoadVariableWidthFont( "gfx/vr/menufont.fnt", &kbd_font, 2.2f, cls.creditsFont.rendermode, TF_FONT ))
+		{
+			if( !Con_LoadVariableWidthFont( "gfx/creditsfont.fnt", &kbd_font, 3.0f, cls.creditsFont.rendermode, TF_FONT ))
+				Con_LoadFixedWidthFont( "gfx/conchars", &kbd_font, 4.0f, cls.creditsFont.rendermode, TF_FONT | TF_NEAREST | TF_KEEP_SOURCE );
+		}
 	}
 
 	IN_VRKbdRect( &x0, &y0, &c );
@@ -380,8 +384,25 @@ void IN_VRDrawKeyboard( void )
 				continue;
 
 			ref.dllFuncs.FillRGBA( kRenderTransTexture, x + 2, y + 2, c - 4, c - 4, over ? 90 : 20, over ? 90 : 20, over ? 90 : 20, 230 );
+			if( k->ch == '\b' )
+			{
+				// backspace: an arrow that points left
+				int bar = Q_max( c / 10, 3 ), cx = x + c / 2, cy = y + c / 2, xl = cx - c * 3 / 10, j;
+
+				ref.dllFuncs.FillRGBA( kRenderTransTexture, xl, cy - bar / 2, c * 6 / 10, bar, 235, 235, 235, 255 );
+
+				for( j = 0; j < 4; j++ )
+				{
+					int half = ( j + 1 ) * bar * 3 / 4;
+
+					ref.dllFuncs.FillRGBA( kRenderTransTexture, xl + j * bar, cy - half, bar, half * 2, 235, 235, 235, 255 );
+				}
+
+				continue;
+			}
+
 			CL_DrawStringLen( kbd_font.valid ? &kbd_font : &cls.creditsFont, k->label, &lw, &lh, 0 );
-			CL_DrawString( x + ( c - lw ) / 2, y + ( c - lh ) / 2, k->label, white, kbd_font.valid ? &kbd_font : &cls.creditsFont, FONT_DRAW_NORENDERMODE );
+			CL_DrawString( x + ( c - lw ) / 2, y + ( c - lh ) / 2, k->label, white, kbd_font.valid ? &kbd_font : &cls.creditsFont, 0 );
 		}
 	}
 }
@@ -645,6 +666,7 @@ void IN_VRInit( void )
 	Cvar_RegisterVariable( &vr_turn_mode );
 	Cvar_RegisterVariable( &vr_move_ref );
 	Cvar_RegisterVariable( &vr_menu_debug );
+	Cvar_RegisterVariable( &vr_move_keys );
 	Cvar_RegisterVariable( &vr_in_wand_yaw );
 	Cvar_RegisterVariable( &vr_in_lmuz_x );
 	Cvar_RegisterVariable( &vr_in_lmuz_y );
@@ -1402,9 +1424,14 @@ void IN_VRMenuFrame( void )
 		migrated = true;
 
 		if( vr_menu_version.value < 1.0f )
-		{
 			Cvar_DirectSetValue( &vr_turn_mode, 1.0f );
-			Cvar_DirectSetValue( &vr_menu_version, 1.0f );
+
+		// the use key (doors, buttons) aims at the exact point the hand ray hits, not along the hand's direction from the
+		// head: a hand held round a corner no longer opens the door on the other side of the wall
+		if( vr_menu_version.value < 2.0f )
+		{
+			Cvar_DirectSetValue( &vr_use_aim, 1.0f );
+			Cvar_DirectSetValue( &vr_menu_version, 2.0f );
 		}
 	}
 
@@ -2051,10 +2078,13 @@ void IN_VRAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 			}
 		}
 
-		if( fwd > 0.3f ) SetBits( cmd->buttons, IN_FORWARD );
-		if( fwd < -0.3f ) SetBits( cmd->buttons, IN_BACK );
-		if( side > 0.3f ) SetBits( cmd->buttons, IN_MOVERIGHT );
-		if( side < -0.3f ) SetBits( cmd->buttons, IN_MOVELEFT );
+		if( vr_move_keys.value )
+		{
+			if( fwd > 0.3f ) SetBits( cmd->buttons, IN_FORWARD );
+			if( fwd < -0.3f ) SetBits( cmd->buttons, IN_BACK );
+			if( side > 0.3f ) SetBits( cmd->buttons, IN_MOVERIGHT );
+			if( side < -0.3f ) SetBits( cmd->buttons, IN_MOVELEFT );
+		}
 	}
 
 	// roomscale: walk to where you really stand. the renderer measures how far that is, this turns it into walking

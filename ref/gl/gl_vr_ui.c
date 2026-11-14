@@ -609,6 +609,8 @@ void VR_UIUpdate( void )
 	float fx, fz, len, head_yaw, diff, dist, zx, zz, pw, ph;
 	int w = gpGlobals->width, h = gpGlobals->height;
 
+	VR_UIProbe();
+
 	// no 3D picture this frame (the intro videos, the Xash menu, loading): the panel with the window is all there is,
 	// and SteamVR's own environment is faded to black behind it
 	{

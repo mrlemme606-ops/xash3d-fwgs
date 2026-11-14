@@ -92,6 +92,7 @@ float VR_GetViewModelScale( void );
 int VR_ViewModelMeshMode( int mesh, const char *texname );	// 0 = draw, 1 = hide, 2 = draw cut off at the wrist
 void VR_ViewModelClip( qboolean on );
 qboolean VR_NoScenePrepare( void );
+void VR_UIProbe( void );
 void VR_ViewModelCutFollow( int side, qboolean valid, const vec3_t wrist, const vec3_t dir );
 qboolean VR_CutFollowWanted( void );
 qboolean VR_CutBoneMatch( int side, const char *bonename );

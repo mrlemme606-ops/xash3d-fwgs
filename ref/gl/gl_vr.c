@@ -16,6 +16,21 @@ Design notes:
 - The 2D HUD/menus are NOT in the headset yet (milestone 1). They still show in the window.
 */
 #include "gl_vr.h"
+
+#ifndef GL_READ_BUFFER
+#define GL_READ_BUFFER		0x0C02
+#endif
+#ifndef GL_DRAW_BUFFER
+#define GL_DRAW_BUFFER		0x0C01
+#endif
+#ifndef GL_COLOR_WRITEMASK
+#define GL_COLOR_WRITEMASK	0x0C23
+#endif
+#ifndef GL_CLIENT_ALL_ATTRIB_BITS
+#define GL_CLIENT_ALL_ATTRIB_BITS	0xFFFFFFFFu
+#endif
+
+static void VR_UIProbe_f( void );
 #include "xash3d_mathlib.h"
 #include <ctype.h>
 
@@ -230,7 +245,7 @@ static CVAR_DEFINE_AUTO( vr_dual_debug, "0", 0, "1 = print once a second whether
 static CVAR_DEFINE_AUTO( vr_dual_cut, "6", FCVAR_ARCHIVE, "where the arm of the left hand weapon is cut off, in units behind the hand (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: pitch degrees (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: yaw degrees (saved with vr_weapon_save_left)" );
-static CVAR_DEFINE_AUTO( vr_cut_follow, "1", FCVAR_ARCHIVE, "1 = the cut of the arm follows the wrist of the weapon model through its animations (shotgun slide, reloading); 0 = fixed to the controller" );
+static CVAR_DEFINE_AUTO( vr_cut_follow, "0", FCVAR_ARCHIVE, "1 = the cut of the arm follows the wrist of the weapon model through its animations (shotgun slide, reloading); 0 = fixed to the controller" );
 static CVAR_DEFINE_AUTO( vr_cut_bone, "r_wr", FCVAR_ARCHIVE, "wrist bone of the right hand's weapon model that the arm cut follows (part of the name, separated by +). vr_vm_dump_tex 2 lists the bones" );
 static CVAR_DEFINE_AUTO( vr_lh_cut_bone, "l_wr", FCVAR_ARCHIVE, "wrist bone of the universal left hand that its arm cut follows" );
 static CVAR_DEFINE_AUTO( vr_dual_muzzle, "10", FCVAR_ARCHIVE, "how far in front of the left hand the muzzle flash of a left gun is drawn (game units)" );
@@ -561,6 +576,7 @@ void VR_InitCvars( void )
 	VR_UIInitCvars();
 	gEngfuncs.Cmd_AddCommand( "vr_vm_center", VR_Center_f, "put the middle of the weapon in your hand. vr_vm_center <size> also sizes it (size = length in units)" );
 	gEngfuncs.Cmd_AddCommand( "vr_vm_info", VR_VMInfo_f, "print what the game says about the weapon model in hand (scale, size, auto-fit) - for weapons that look wrong" );
+	gEngfuncs.Cmd_AddCommand( "vr_ui_probe", VR_UIProbe_f, "while the UI is black: print what the window holds and the GL state" );
 	gEngfuncs.Cmd_AddCommand( "vr_slots", VR_Slots_f, "print what the game says is in the three hotkey slots, and whether the logo file exists" );
 	gEngfuncs.Cmd_AddCommand( "vr_ents", VR_Ents_f, "list the things drawn in this scene (model, render fx, distance, size). \"vr_ents all\" lists everything" );
 	gEngfuncs.Cmd_AddCommand( "vr_gl_info", VR_GLInfo_f, "print which OpenGL driver / opengl32.dll the game is using" );
@@ -2324,12 +2340,60 @@ static void VR_DrawDualFlash( void )
 	pglPopAttrib();
 }
 
+
+// vr_ui_probe: run it while the UI is black. It prints what the window holds (alpha 0 = transparent, as it should be) and
+// the GL state, so the cause can be found
+static int vr_probe_frames;
+
+static void VR_UIProbe_f( void )
+{
+	vr_probe_frames = 500;
+	gEngfuncs.Con_Printf( "VR probe: close the console; in about five seconds the window is measured\n" );
+}
+
+void VR_UIProbe( void )
+{
+	static const float at[5][2] = { { 0.5f, 0.5f }, { 0.1f, 0.1f }, { 0.9f, 0.1f }, { 0.1f, 0.9f }, { 0.9f, 0.9f } };
+	GLubyte px[4];
+	GLint fbo = 0, prog = 0, tmu = 0, rb = 0, db = 0;
+	GLboolean mask[4], blend, scissor, depth;
+	GLfloat clear[4];
+	int i, w = gpGlobals->width, h = gpGlobals->height;
+
+	if( vr_probe_frames <= 0 || --vr_probe_frames > 0 )
+		return;
+
+	pglGetIntegerv( GL_FRAMEBUFFER_BINDING, &fbo );
+	pglGetIntegerv( 0x8B8D, &prog );	// GL_CURRENT_PROGRAM
+	pglGetIntegerv( GL_ACTIVE_TEXTURE_ARB, &tmu );
+	pglGetIntegerv( GL_READ_BUFFER, &rb );
+	pglGetIntegerv( GL_DRAW_BUFFER, &db );
+	pglGetBooleanv( GL_COLOR_WRITEMASK, mask );
+	pglGetFloatv( GL_COLOR_CLEAR_VALUE, clear );
+	blend = pglIsEnabled( GL_BLEND );
+	scissor = pglIsEnabled( GL_SCISSOR_TEST );
+	depth = pglIsEnabled( GL_DEPTH_TEST );
+
+	gEngfuncs.Con_Printf( "VR probe: framebuffer %d, program %d, texture unit %d, read buffer 0x%x, draw buffer 0x%x\n", fbo, prog, tmu - GL_TEXTURE0_ARB, rb, db );
+	gEngfuncs.Con_Printf( "VR probe: color mask %d%d%d%d, clear color %.2f %.2f %.2f %.2f, blend %d, scissor %d, depth test %d\n",
+		mask[0], mask[1], mask[2], mask[3], clear[0], clear[1], clear[2], clear[3], blend, scissor, depth );
+	gEngfuncs.Con_Printf( "VR probe: dual wield %s, window %dx%d\n", vr_dual_model[0] ? vr_dual_model : "none", w, h );
+
+	for( i = 0; i < 5; i++ )
+	{
+		px[0] = px[1] = px[2] = px[3] = 77;
+		pglReadPixels( (int)( at[i][0] * ( w - 1 )), (int)( at[i][1] * ( h - 1 )), 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px );
+		gEngfuncs.Con_Printf( "VR probe: window pixel at %.1f %.1f = r%d g%d b%d alpha %d\n", at[i][0], at[i][1], px[0], px[1], px[2], px[3] );
+	}
+}
+
 void VR_DrawDualWeapon( void )
 {
 	char model[64];
 	vec3_t origin;
 	float vang[3], scale;
 	qboolean wrote;
+	GLint dual_fbo = 0;
 
 	if( !vr_dual.value || !vr.in_eye_pass || !VR_CofDualModel( model, sizeof( model )))
 		return;
@@ -2351,7 +2415,9 @@ void VR_DrawDualWeapon( void )
 	// the engine's own studio renderer honours the angles we give; the game's renderer for this second weapon
 	// followed the arm but did not turn with the hand
 	// the game draws this weapon with its own programs and states; nothing of that may reach the screens drawn later
+	pglGetIntegerv( GL_FRAMEBUFFER_BINDING, &dual_fbo );
 	pglPushAttrib( GL_ALL_ATTRIB_BITS );
+	pglPushClientAttrib( GL_CLIENT_ALL_ATTRIB_BITS );
 	R_StudioForceBuiltin( vr_dual_builtin.value != 0.0f );
 	R_StudioSetDualPose( true, model, origin, vang );
 
@@ -2367,7 +2433,13 @@ void VR_DrawDualWeapon( void )
 	pglDisable( GL_CLIP_PLANE0 );
 	pglDisable( 0x8620 );	// GL_VERTEX_PROGRAM_ARB
 	pglDisable( 0x8804 );	// GL_FRAGMENT_PROGRAM_ARB
+
+	if( pglUseProgramObjectARB )
+		pglUseProgramObjectARB( 0 );
+
+	pglPopClientAttrib();
 	pglPopAttrib();
+	pglBindFramebuffer( GL_FRAMEBUFFER, dual_fbo );
 	pglDepthMask( GL_TRUE );
 	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
 
