@@ -1007,8 +1007,12 @@ static qboolean IN_VRMenuToggle( void )
 		return true;
 	}
 
+	// the game's own main menu: Y does nothing (the Xash menu stays on the keyboard's escape)
+	if( Q_stristr( clgame.mapname, "c_game_menu" ))
+		return true;
+
 	// an inventory or the computer is open: Y still closes that one
-	if( cls.key_dest != key_game || host.mouse_visible || Q_stristr( clgame.mapname, "c_game_menu" ))
+	if( cls.key_dest != key_game || host.mouse_visible )
 		return false;
 
 	IN_VRMenuOpen( 1 );

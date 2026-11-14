@@ -231,7 +231,9 @@ static CVAR_DEFINE_AUTO( vr_dual_cut, "6", FCVAR_ARCHIVE, "where the arm of the 
 static CVAR_DEFINE_AUTO( vr_dual_cut_pitch, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: pitch degrees (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_dual_cut_yaw, "0", FCVAR_ARCHIVE, "tilt of the left weapon's arm cut: yaw degrees (saved with vr_weapon_save_left)" );
 static CVAR_DEFINE_AUTO( vr_cut_follow, "1", FCVAR_ARCHIVE, "1 = the cut of the arm follows the wrist of the weapon model through its animations (shotgun slide, reloading); 0 = fixed to the controller" );
-static CVAR_DEFINE_AUTO( vr_cut_bone, "r_hand+r_wrist", FCVAR_ARCHIVE, "bone of the weapon model (part of the name, separated by +) the arm cut follows. vr_vm_dump_tex 2 lists the bones" );
+static CVAR_DEFINE_AUTO( vr_cut_bone, "r_wr", FCVAR_ARCHIVE, "wrist bone of the right hand's weapon model that the arm cut follows (part of the name, separated by +). vr_vm_dump_tex 2 lists the bones" );
+static CVAR_DEFINE_AUTO( vr_lh_cut_bone, "l_wr", FCVAR_ARCHIVE, "wrist bone of the universal left hand that its arm cut follows" );
+static CVAR_DEFINE_AUTO( vr_dual_muzzle, "10", FCVAR_ARCHIVE, "how far in front of the left hand the muzzle flash of a left gun is drawn (game units)" );
 static CVAR_DEFINE_AUTO( vr_dual_clip_all, "1", FCVAR_ARCHIVE, "1 = the left weapon of a dual wield is cut behind the wrist with vr_dual_cut (it is drawn by the game, so this cuts everything behind the plane)" );
 static CVAR_DEFINE_AUTO( vr_dual_clip_tex, "", FCVAR_ARCHIVE, "extra texture name fragments of the left weapon's arm that are cut off behind the wrist (separate with +). vr_vm_dump_tex 1 lists the textures" );
 static CVAR_DEFINE_AUTO( vr_dual_anim_hold, "idle+draw+holster+equip+deploy+reload+pull+hide+show+inspect+fidget+lean+sprint+walk+run", FCVAR_ARCHIVE, "animation names (part of the name, separated by +) that a gun on the left hand does NOT play" );
@@ -466,6 +468,8 @@ void VR_InitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_clip_all );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cut_follow );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cut_bone );
+	gEngfuncs.Cvar_RegisterVariable( &vr_lh_cut_bone );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_muzzle );
 	gEngfuncs.Cvar_RegisterVariable( &vr_dual_own );
 	gEngfuncs.Cvar_RegisterVariable( &vr_hand_reach );
 	gEngfuncs.Cvar_RegisterVariable( &vr_anim_play );
@@ -794,6 +798,7 @@ static void VR_UpdateHands( const ref_viewpass_t *game )
 
 static vec3_t vr_aim_target;
 static qboolean vr_aim_hit;	// the hand ray hit something, vr_aim_target is that point
+static qboolean vr_vm_camera;	// the digital camera: its "shoot" animation (the click) always plays
 static qboolean vr_vm_omni, vr_vm_flare;	// flare or lantern in hand
 static qboolean vr_vm_nofreeze;	// never held in the idle pose, whatever the lists say (camera, branch)
 static qboolean vr_vm_static;	// the weapon in hand never animates (phone, syringe)
@@ -1562,6 +1567,7 @@ static qboolean VR_ListMatches( const char *list, const char *name, qboolean spl
 }
 
 static qboolean vr_left_pass;	// the universal left hand is being drawn
+static double vr_dual_flash_until;
 static qboolean vr_dual_pass;	// the weapon of the left hand (dual wield) is being drawn
 static char vr_dual_model[64];
 
@@ -1593,6 +1599,19 @@ qboolean VR_DualAnimPlays( const char *label )
 
 		if( !VR_ListMatches( vr_melee_models.string, base, true ))
 			plays = !VR_ListMatches( vr_dual_anim_hold.string, label, false );
+	}
+
+	// a shot of the left gun starts: the muzzle flash is drawn for a moment
+	{
+		static char lastshot[64];
+
+		if( Q_strncmp( lastshot, label, sizeof( lastshot ) - 1 ))
+		{
+			Q_strncpy( lastshot, label, sizeof( lastshot ));
+
+			if( plays && ( VR_ContainsNoCase( label, "shoot" ) || VR_ContainsNoCase( label, "fire" ) || VR_ContainsNoCase( label, "shot" )))
+				vr_dual_flash_until = ( gp_cl ? gp_cl->time : 0.0 ) + 0.07;
+		}
 	}
 
 	if( vr_dual_debug.value && Q_strncmp( last, label, sizeof( last ) - 1 ))
@@ -1629,27 +1648,28 @@ int VR_ViewModelMeshMode( int mesh, const char *texname )
 
 // everything in front of a plane just behind the hand is drawn, the arm behind it is cut off
 // where the wrist of the weapon model is this frame, and which way the arm runs (from the elbow to the wrist)
-static qboolean vr_follow_valid;
-static vec3_t vr_follow_pt, vr_follow_dir;
+static qboolean vr_follow_valid[2];	// 0 = the right hand's weapon, 1 = the universal left hand
+static vec3_t vr_follow_pt[2], vr_follow_dir[2];
 
 qboolean VR_CutFollowWanted( void )
 {
 	return vr_cut_follow.value != 0.0f;
 }
 
-qboolean VR_CutBoneMatch( const char *bonename )
+qboolean VR_CutBoneMatch( int side, const char *bonename )
 {
-	return VR_ListMatches( vr_cut_bone.string, bonename, true );
+	return VR_ListMatches( side ? vr_lh_cut_bone.string : vr_cut_bone.string, bonename, true );
 }
 
-void VR_ViewModelCutFollow( qboolean valid, const vec3_t wrist, const vec3_t dir )
+void VR_ViewModelCutFollow( int side, qboolean valid, const vec3_t wrist, const vec3_t dir )
 {
-	vr_follow_valid = valid;
+	side = side ? 1 : 0;
+	vr_follow_valid[side] = valid;
 
 	if( valid )
 	{
-		VectorCopy( wrist, vr_follow_pt );
-		VectorCopy( dir, vr_follow_dir );
+		VectorCopy( wrist, vr_follow_pt[side] );
+		VectorCopy( dir, vr_follow_dir[side] );
 	}
 }
 
@@ -1679,10 +1699,12 @@ void VR_ViewModelClip( qboolean on )
 
 	// the right hand's weapon: the plane sits on the animated wrist and runs along the arm, so the cut stays at the
 	// same place of the arm whatever the animation does (the controller does not move with the slide of a shotgun)
-	if( !vr_dual_pass && !vr_left_pass && vr_follow_valid && vr_cut_follow.value != 0.0f )
+	if( !vr_dual_pass && vr_follow_valid[vr_left_pass ? 1 : 0] && vr_cut_follow.value != 0.0f )
 	{
-		VectorCopy( vr_follow_dir, n );
-		VectorMA( vr_follow_pt, -cut, n, c );
+		int sd = vr_left_pass ? 1 : 0;
+
+		VectorCopy( vr_follow_dir[sd], n );
+		VectorMA( vr_follow_pt[sd], -cut, n, c );
 	}
 
 	eq[0] = n[0];
@@ -2245,6 +2267,63 @@ static qboolean VR_GetDualPose( const char *model, vec3_t origin, float *vang, f
 	return true;
 }
 
+// the muzzle flash of the left gun: the game draws none for it, so a short soft star is drawn in front of the left hand
+static void VR_DrawDualFlash( void )
+{
+	float proj[16], view[16], k;
+	double now = gp_cl ? gp_cl->time : 0.0;
+	vec3_t c, p;
+	int i;
+
+	if( now > vr_dual_flash_until || !vr.hand[0].valid )
+		return;
+
+	k = bound( 0.0f, (float)( vr_dual_flash_until - now ) / 0.07f, 1.0f );
+	VectorMA( vr.hand[0].pos, vr_dual_muzzle.value, vr.hand[0].fwd, c );
+
+	Matrix4x4_ToArrayFloatGL( RI.projectionMatrix, proj );
+	Matrix4x4_ToArrayFloatGL( RI.worldviewMatrix, view );
+
+	pglPushAttrib( GL_ALL_ATTRIB_BITS );
+	pglMatrixMode( GL_PROJECTION );
+	pglPushMatrix();
+	pglLoadMatrixf( proj );
+	pglMatrixMode( GL_MODELVIEW );
+	pglPushMatrix();
+	pglLoadMatrixf( view );
+
+	pglDisable( GL_TEXTURE_2D );
+	pglDisable( GL_CULL_FACE );
+	pglDisable( GL_ALPHA_TEST );
+	pglDisable( GL_DEPTH_TEST );
+	pglEnable( GL_BLEND );
+	pglBlendFunc( GL_SRC_ALPHA, GL_ONE );
+	pglDepthMask( GL_FALSE );
+
+	pglBegin( GL_TRIANGLE_FAN );
+	pglColor4f( 1.0f, 0.95f, 0.65f, k );
+	pglVertex3fv( c );
+
+	for( i = 0; i <= 16; i++ )
+	{
+		float a = (float)i * ( M_PI_F * 2.0f / 16.0f ), r = ( i & 1 ) ? 1.5f : 4.5f;
+
+		VectorMA( c, cos( a ) * r, RI.vright, p );
+		VectorMA( p, sin( a ) * r, RI.vup, p );
+		pglColor4f( 1.0f, 0.55f, 0.15f, 0.0f );
+		pglVertex3fv( p );
+	}
+
+	pglEnd();
+
+	pglMatrixMode( GL_MODELVIEW );
+	pglPopMatrix();
+	pglMatrixMode( GL_PROJECTION );
+	pglPopMatrix();
+	pglMatrixMode( GL_MODELVIEW );
+	pglPopAttrib();
+}
+
 void VR_DrawDualWeapon( void )
 {
 	char model[64];
@@ -2311,6 +2390,8 @@ void VR_DrawDualWeapon( void )
 
 	pglPopMatrix();
 	pglDepthRange( gldepthmin, gldepthmax );
+
+	VR_DrawDualFlash();
 }
 
 // tell the engine whether we are dual wielding, and where the left hand shoots
@@ -2387,6 +2468,9 @@ static void VR_ApplyBuiltinProfile( const char *base )
 qboolean VR_AnimPlays( int seq, const char *label )
 {
 	int mask = (int)vr_anim_mask.value;
+
+	if( vr_vm_camera && label && VR_ContainsNoCase( label, "shoot" ))
+		return true;
 
 	if( mask != 0 )
 		return seq >= 0 && seq < 24 && FBitSet( mask, 1 << seq );
@@ -2474,6 +2558,7 @@ static void VR_UpdateWeaponProfile( void )
 		vr_vm_nofreeze = VR_ListMatches( vr_nofreeze_models.string, base, true );
 		vr_vm_omni = VR_ListMatches( vr_omni_models.string, base, true );
 		vr_vm_flare = VR_ContainsNoCase( base, "flare" );
+		vr_vm_camera = VR_ContainsNoCase( base, "camera" );
 		vr_vm_scope = VR_ListMatches( vr_scope_models.string, base, true );
 		vr_vm_mirror_auto = VR_ListMatches( vr_mirror_models.string, base, true );
 		VR_ApplyBuiltinProfile( base );

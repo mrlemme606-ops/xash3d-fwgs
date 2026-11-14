@@ -42,7 +42,7 @@ static CVAR_DEFINE_AUTO( vr_cof_eyeangles, "1", FCVAR_ARCHIVE, "1 = give the cli
 static CVAR_DEFINE_AUTO( vr_cof_eyeorigin, "1", FCVAR_ARCHIVE, "1 = centre the client.dll sky on the eye being drawn instead of the game's view origin" );
 static CVAR_DEFINE_AUTO( vr_cof_depth, "0.8", 0, "far end of the depth range the world is drawn in while the game's client.dll is attached (it keeps 0.8 to 1.0 for its sky). 1 = off" );
 static CVAR_DEFINE_AUTO( vr_cof_watersize, "1", FCVAR_ARCHIVE, "1 = tell the game's water effect the size of the eye picture (it copies the screen from the bottom left corner at the window size). Experimental" );
-static CVAR_DEFINE_AUTO( vr_dual_idles, "v_p345=idletest+v_glock=idle1", FCVAR_ARCHIVE, "the idle animation the game uses for each weapon in the left hand (learned while you play): weapon=animation+weapon=animation" );
+static CVAR_DEFINE_AUTO( vr_dual_idle_list, "v_p345=idletest+v_glock=idle1+v_switchblade=p2idle+v_branch=idle_onehand", FCVAR_ARCHIVE, "the idle animation the game uses for each weapon in the left hand (learned while you play): weapon=animation+weapon=animation" );
 static CVAR_DEFINE_AUTO( vr_cof_watercomp, "1", FCVAR_ARCHIVE, "the game's own water reflection is a copy of the picture shifted 'up' on the screen. 1 = shift towards the real up of the world (stable when you tilt your head), -1 = the other way round, 0 = shift along the screen like the flat game" );
 static CVAR_DEFINE_AUTO( vr_cof_waterscale, "0.5", FCVAR_ARCHIVE, "how far the game's water reflection is shifted (1 = like the flat game)" );
 static CVAR_DEFINE_AUTO( vr_cof_prepass, "0", 0, "1 = still honour vr_eye_prepass while the client.dll re-arm is working (normally not needed)" );
@@ -766,7 +766,7 @@ static void COF_ModelKey( const char *name, char *out, size_t size )
 // the remembered idle label of a weapon, or false
 static qboolean COF_IdleLookup( const char *key, char *label, size_t size )
 {
-	const char *p = vr_dual_idles.string;
+	const char *p = vr_dual_idle_list.string;
 	size_t klen = Q_strlen( key );
 
 	while( *p )
@@ -793,7 +793,7 @@ static qboolean COF_IdleLookup( const char *key, char *label, size_t size )
 static void COF_IdleRemember( const char *key, const char *label )
 {
 	char old[40], out[256], tok[96];
-	const char *p = vr_dual_idles.string;
+	const char *p = vr_dual_idle_list.string;
 
 	if( COF_IdleLookup( key, old, sizeof( old )) && !Q_stricmp( old, label ))
 		return;
@@ -824,8 +824,14 @@ static void COF_IdleRemember( const char *key, const char *label )
 		Q_strncat( out, key, sizeof( out ));
 		Q_strncat( out, "=", sizeof( out ));
 		Q_strncat( out, label, sizeof( out ));
-		gEngfuncs.Cvar_Set( "vr_dual_idles", out );
+		gEngfuncs.Cvar_Set( "vr_dual_idle_list", out );
 	}
+}
+
+// an idle that is a held pose, not a sprint or a fidget (sprint_idle is no idle)
+static qboolean COF_TrueIdle( const char *label )
+{
+	return VR_IsIdleLabel( label ) && !Q_stristr( label, "sprint" ) && !Q_stristr( label, "fidget" );
 }
 
 static void COF_FreezeDualAnim( cl_entity_t *e )
@@ -867,7 +873,7 @@ static void COF_FreezeDualAnim( cl_entity_t *e )
 
 	// the game's own idle for the left weapon (a different pose than the right hand's: the switchblade is turned
 	// blade down, for example) stays as it is, held on its first frame
-	if( VR_IsIdleLabel( sd[seq].label ))
+	if( COF_TrueIdle( sd[seq].label ))
 	{
 		if( slot < 0 )
 		{
@@ -918,10 +924,10 @@ static void COF_FreezeDualAnim( cl_entity_t *e )
 	{
 		for( i = 0; i < hdr->numseq; i++ )
 		{
-			if( !VR_IsIdleLabel( sd[i].label ))
+			if( !COF_TrueIdle( sd[i].label ))
 				continue;
 
-			if( Q_stristr( sd[i].label, "test" ) || Q_stristr( sd[i].label, "dual" ) || Q_stristr( sd[i].label, "left" ))
+			if( Q_stristr( sd[i].label, "test" ) || Q_stristr( sd[i].label, "dual" ) || Q_stristr( sd[i].label, "left" ) || Q_stristr( sd[i].label, "onehand" ) || Q_stristr( sd[i].label, "p2" ))
 			{
 				idle = i;
 				break;
@@ -1002,7 +1008,7 @@ void VR_CofInitCvars( void )
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_eyeangles );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_prepass );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_watersize );
-	gEngfuncs.Cvar_RegisterVariable( &vr_dual_idles );
+	gEngfuncs.Cvar_RegisterVariable( &vr_dual_idle_list );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_watercomp );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_waterscale );
 	gEngfuncs.Cvar_RegisterVariable( &vr_cof_depth );
